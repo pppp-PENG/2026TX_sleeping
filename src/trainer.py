@@ -301,14 +301,15 @@ class PCVRHyFormerRankingTrainer:
             loss_sum = 0.0
 
             for step, batch in train_pbar:
-                loss = self._train_step(batch)
+                loss, total_norm = self._train_step(batch)
                 total_step += 1
                 loss_sum += loss
 
                 if self.writer:
                     self.writer.add_scalar('Loss/train', loss, total_step)
+                    self.writer.add_scalar('GradientNorm/train', total_norm, total_step)
 
-                train_pbar.set_postfix({"loss": f"{loss:.4f}"})
+                train_pbar.set_postfix({"loss": f"{loss:.4f}", "grad_norm": f"{total_norm:.4f}"})
 
                 # Step-level validation (only when eval_every_n_steps > 0).
                 if self.eval_every_n_steps > 0 and total_step % self.eval_every_n_steps == 0:
@@ -417,6 +418,14 @@ class PCVRHyFormerRankingTrainer:
         else:
             loss = F.binary_cross_entropy_with_logits(logits, label)
         loss.backward()
+
+        # calculate total grad norm before clipping for logging purposes
+        total_norm = 0.0
+        for param in self.model.parameters():
+            if param.grad is not None:
+                total_norm += param.grad.data.norm(2).item() ** 2
+        total_norm = total_norm ** 0.5
+
         # foreach=False: avoids a PyTorch _foreach_norm CUDA kernel bug observed
         # with certain tensor shapes in this project.
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, foreach=False)
@@ -425,7 +434,7 @@ class PCVRHyFormerRankingTrainer:
         if self.sparse_optimizer is not None:
             self.sparse_optimizer.step()
 
-        return loss.item()
+        return loss.item(), total_norm
 
     def evaluate(self, epoch: Optional[int] = None) -> Tuple[float, float]:
         """Run validation over ``self.valid_loader`` and return ``(AUC, logloss)``.

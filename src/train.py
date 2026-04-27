@@ -355,6 +355,8 @@ def main() -> None:
     trainer.train()
     writer.close()
 
+    logging.info(f"num_samples: {len(train_loader.dataset)}")
+
     logging.info("Training complete!")
 
 
