@@ -16,6 +16,7 @@ class ModelInput(NamedTuple):
     seq_data: dict        # {domain: tensor [B, S, L]}
     seq_lens: dict        # {domain: tensor [B]}
     seq_time_buckets: dict  # {domain: tensor [B, L]}
+    seq_stats: dict       # {domain: tensor [B, 4]} log1p counts; empty dict if unused
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1377,6 +1378,16 @@ class PCVRHyFormer(nn.Module):
         if num_time_buckets > 0:
             self.time_embedding = nn.Embedding(num_time_buckets, d_model, padding_idx=0)
 
+        # ================== Sequence Count Statistics Projection ==================
+        # 4 log1p-normalized counts: total, ≤1h, ≤1d, ≤7d.
+        # One lightweight projection per domain; output is broadcast-added to all
+        # sequence positions so the mean-pool in query generation picks it up.
+        _num_stat_feats = 4
+        self.seq_stat_projs = nn.ModuleList([
+            nn.Sequential(nn.Linear(_num_stat_feats, d_model), nn.SiLU(), nn.LayerNorm(d_model))
+            for _ in self.seq_domains
+        ])
+
         # ================== HyFormer Components ==================
         # MultiSeqQueryGenerator
         self.query_generator = MultiSeqQueryGenerator(
@@ -1651,12 +1662,16 @@ class PCVRHyFormer(nn.Module):
         # 2. Embed each sequence domain (dynamic)
         seq_tokens_list = []
         seq_masks_list = []
-        for domain in self.seq_domains:
+        for i, domain in enumerate(self.seq_domains):
             tokens = self._embed_seq_domain(
                 inputs.seq_data[domain],
                 self._seq_embs[domain], self._seq_proj[domain],
                 self._seq_is_id[domain], self._seq_emb_index[domain],
                 inputs.seq_time_buckets[domain])
+            if domain in inputs.seq_stats:
+                stat_emb = self.seq_stat_projs[i](
+                    inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
+                tokens = tokens + stat_emb.unsqueeze(1)          # broadcast → (B, L, D)
             seq_tokens_list.append(tokens)
             mask = self._make_padding_mask(inputs.seq_lens[domain], inputs.seq_data[domain].shape[2])
             seq_masks_list.append(mask)
@@ -1693,12 +1708,16 @@ class PCVRHyFormer(nn.Module):
 
         seq_tokens_list = []
         seq_masks_list = []
-        for domain in self.seq_domains:
+        for i, domain in enumerate(self.seq_domains):
             tokens = self._embed_seq_domain(
                 inputs.seq_data[domain],
                 self._seq_embs[domain], self._seq_proj[domain],
                 self._seq_is_id[domain], self._seq_emb_index[domain],
                 inputs.seq_time_buckets[domain])
+            if domain in inputs.seq_stats:
+                stat_emb = self.seq_stat_projs[i](
+                    inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
+                tokens = tokens + stat_emb.unsqueeze(1)          # broadcast → (B, L, D)
             seq_tokens_list.append(tokens)
             mask = self._make_padding_mask(inputs.seq_lens[domain], inputs.seq_data[domain].shape[2])
             seq_masks_list.append(mask)

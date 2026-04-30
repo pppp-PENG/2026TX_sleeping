@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
                         help='Batch size for both training and validation')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='Learning rate for dense parameters (AdamW)')
-    parser.add_argument('--num_epochs', type=int, default=999,
+    parser.add_argument('--num_epochs', type=int, default=3,
                         help='Maximum number of training epochs '
                              '(typically terminated earlier by early stopping)')
     parser.add_argument('--patience', type=int, default=5,

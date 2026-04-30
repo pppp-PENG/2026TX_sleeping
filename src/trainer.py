@@ -108,6 +108,13 @@ class PCVRHyFormerRankingTrainer:
         self.eval_every_n_steps: int = eval_every_n_steps
         self.train_config: Optional[Dict[str, Any]] = train_config
 
+        # 混合精度训练
+        self.mixed_precision = True
+        # self.scaler = torch.amp.GradScaler('cuda')
+        self.scaler = None
+        self.use_amp = True
+        self.amp_dtype = torch.bfloat16
+
         logging.info(f"PCVRHyFormerRankingTrainer loss_type={loss_type}, "
                      f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
                      f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}")
@@ -382,6 +389,7 @@ class PCVRHyFormerRankingTrainer:
         seq_data: Dict[str, torch.Tensor] = {}
         seq_lens: Dict[str, torch.Tensor] = {}
         seq_time_buckets: Dict[str, torch.Tensor] = {}
+        seq_stats: Dict[str, torch.Tensor] = {}
         for domain in seq_domains:
             seq_data[domain] = device_batch[domain]
             seq_lens[domain] = device_batch[f'{domain}_len']
@@ -390,6 +398,8 @@ class PCVRHyFormerRankingTrainer:
             seq_time_buckets[domain] = device_batch.get(
                 f'{domain}_time_bucket',
                 torch.zeros(B, L, dtype=torch.long, device=self.device))
+            if f'{domain}_stat' in device_batch:
+                seq_stats[domain] = device_batch[f'{domain}_stat']
         return ModelInput(
             user_int_feats=device_batch['user_int_feats'],
             item_int_feats=device_batch['item_int_feats'],
@@ -398,6 +408,7 @@ class PCVRHyFormerRankingTrainer:
             seq_data=seq_data,
             seq_lens=seq_lens,
             seq_time_buckets=seq_time_buckets,
+            seq_stats=seq_stats,
         )
 
     def _train_step(self, batch: Dict[str, Any]) -> float:
@@ -409,27 +420,55 @@ class PCVRHyFormerRankingTrainer:
         if self.sparse_optimizer is not None:
             self.sparse_optimizer.zero_grad()
 
-        model_input = self._make_model_input(device_batch)
-        logits = self.model(model_input)  # (B, 1)
-        logits = logits.squeeze(-1)  # (B,)
+        if self.mixed_precision:
+            with torch.amp.autocast('cuda', dtype=self.amp_dtype, enabled=self.use_amp):
+                model_input = self._make_model_input(device_batch)
+                logits = self.model(model_input)  # (B, 1)
+                logits = logits.squeeze(-1)  # (B,)
 
-        if self.loss_type == 'focal':
-            loss = sigmoid_focal_loss(logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma)
+                if self.loss_type == 'focal':
+                    loss = sigmoid_focal_loss(logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma)
+                else:
+                    loss = F.binary_cross_entropy_with_logits(logits, label)
+
+                # self.scaler.scale(loss).backward()
+
+                # self.scaler.unscale_(self.dense_optimizer)
+                # if self.sparse_optimizer is not None:
+                #     self.scaler.unscale_(self.sparse_optimizer)
         else:
-            loss = F.binary_cross_entropy_with_logits(logits, label)
+            model_input = self._make_model_input(device_batch)
+            logits = self.model(model_input)  # (B, 1)
+            logits = logits.squeeze(-1)  # (B,)
+
+            if self.loss_type == 'focal':
+                loss = sigmoid_focal_loss(logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma)
+            else:
+                loss = F.binary_cross_entropy_with_logits(logits, label)
+
         loss.backward()
 
-        # calculate total grad norm before clipping for logging purposes
-        total_norm = 0.0
-        for param in self.model.parameters():
-            if param.grad is not None:
-                total_norm += param.grad.data.norm(2).item() ** 2
-        total_norm = total_norm ** 0.5
+        # 计算梯度范数
+        # total_norm = 0.0
+        # for param in self.model.parameters():
+        #     if param.grad is not None:
+        #         total_norm += param.grad.data.norm(2).item() ** 2
+        # total_norm = total_norm ** 0.5
 
         # foreach=False: avoids a PyTorch _foreach_norm CUDA kernel bug observed
         # with certain tensor shapes in this project.
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, foreach=False)
+        total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, foreach=False)
 
+        # if self.scaler is not None:
+        #     self.scaler.step(self.dense_optimizer)
+        #     if self.sparse_optimizer is not None:
+        #         self.scaler.step(self.sparse_optimizer)
+        #     self.scaler.update()
+
+        # else:
+        #     self.dense_optimizer.step()
+        #     if self.sparse_optimizer is not None:
+        #         self.sparse_optimizer.step()
         self.dense_optimizer.step()
         if self.sparse_optimizer is not None:
             self.sparse_optimizer.step()

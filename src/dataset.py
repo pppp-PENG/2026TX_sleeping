@@ -131,6 +131,13 @@ BUCKET_BOUNDARIES = np.array([
 # ``--use_time_buckets`` and derive the concrete bucket count from here.
 NUM_TIME_BUCKETS = len(BUCKET_BOUNDARIES) + 1
 
+# Maximum bucket ID (inclusive) for 1h / 1d / 7d time windows.
+# Computed once from BUCKET_BOUNDARIES so the thresholds stay consistent if
+# the boundaries array is ever updated.
+_STAT_BUCKET_1H = int(np.searchsorted(BUCKET_BOUNDARIES, 3600)) + 1    # ≤ 1 hour
+_STAT_BUCKET_1D = int(np.searchsorted(BUCKET_BOUNDARIES, 86400)) + 1   # ≤ 1 day
+_STAT_BUCKET_7D = int(np.searchsorted(BUCKET_BOUNDARIES, 604800)) + 1  # ≤ 7 days
+
 
 class PCVRParquetDataset(IterableDataset):
     """PCVR dataset that reads raw multi-column Parquet directly.
@@ -268,6 +275,8 @@ class PCVRParquetDataset(IterableDataset):
             f"PCVRParquetDataset: {self.num_rows} rows from "
             f"{len(self._parquet_files)} file(s), batch_size={batch_size}, "
             f"buffer_batches={buffer_batches}, shuffle={shuffle}")
+
+        logging.info(f"cols: {self._col_idx.keys()}")
 
     def _load_schema(self, schema_path: str, seq_max_lens: Dict[str, int]) -> None:
         """Populate per-group schema information from ``schema_path``."""
@@ -508,6 +517,7 @@ class PCVRParquetDataset(IterableDataset):
 
         # ---- meta ----
         timestamps = batch.column(self._col_idx['timestamp']).to_numpy().astype(np.int64)
+        # label_times = batch.column(self._col_idx['label_time']).to_numpy().astype(np.int64)
         if self.is_training:
             labels = (batch.column(self._col_idx['label_type']).fill_null(0)
                       .to_numpy(zero_copy_only=False).astype(np.int64) == 2).astype(np.int64)
@@ -577,6 +587,7 @@ class PCVRParquetDataset(IterableDataset):
             'item_dense_feats': torch.zeros(B, 0, dtype=torch.float32),
             'label': torch.from_numpy(labels),
             'timestamp': torch.from_numpy(timestamps),
+            # 'label_time': torch.from_numpy(label_times),
             'user_id': user_ids,
             '_seq_domains': self.seq_domains,
         }
@@ -646,6 +657,7 @@ class PCVRParquetDataset(IterableDataset):
                     ts_padded[i, :ul] = ts_vals[s:s + ul]
 
                 ts_expanded = timestamps.reshape(-1, 1)
+                # ts_expanded = label_times.reshape(-1, 1)
                 time_diff = np.maximum(ts_expanded - ts_padded, 0)
                 # np.searchsorted returns values in [0, len(BUCKET_BOUNDARIES)].
                 # After +1 the nominal range is [1, len(BUCKET_BOUNDARIES)+1];
@@ -665,6 +677,19 @@ class PCVRParquetDataset(IterableDataset):
                 time_bucket[:] = buckets
 
             result[f'{domain}_time_bucket'] = torch.from_numpy(time_bucket.copy())
+
+            # Sequence count statistics: (B, 4) float32, log1p-normalized.
+            # [0] count_total  [1] count_1h  [2] count_1d  [3] count_7d
+            stat = np.empty((B, 4), dtype=np.float32)
+            stat[:, 0] = np.log1p(lengths)
+            if ts_ci is not None:
+                valid = time_bucket >= 1  # (B, max_len), excludes padding
+                stat[:, 1] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1H), axis=1))
+                stat[:, 2] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1D), axis=1))
+                stat[:, 3] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_7D), axis=1))
+            else:
+                stat[:, 1:] = 0.0
+            result[f'{domain}_stat'] = torch.from_numpy(stat)
 
         return result
 
@@ -759,5 +784,9 @@ def get_pcvr_data(
 
     logging.info(f"Parquet train: {train_rows} rows, valid: {valid_rows} rows, "
                  f"batch_size={batch_size}, buffer_batches={buffer_batches}")
+    
+    # get the number of positive (label == 1) samples (3618)
+    # num_positive_samples = sum(1 for batch in train_loader if batch['label'].eq(1).any())
+    # logging.info(f"Number of positive samples in training set: {num_positive_samples}")
 
     return train_loader, valid_loader, train_dataset
