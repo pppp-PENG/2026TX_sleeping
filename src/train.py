@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
                         help='Batch size for both training and validation')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='Learning rate for dense parameters (AdamW)')
-    parser.add_argument('--num_epochs', type=int, default=3,
+    parser.add_argument('--num_epochs', type=int, default=5,
                         help='Maximum number of training epochs '
                              '(typically terminated earlier by early stopping)')
     parser.add_argument('--patience', type=int, default=5,
@@ -143,6 +143,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--focal_gamma', type=float, default=2.0,
                         help='Focal Loss focusing parameter gamma '
                              '(effective only when --loss_type=focal)')
+
+    # LR scheduler.
+    parser.add_argument('--warmup_ratio', type=float, default=0.05,
+                        help='Fraction of total training steps used for linear LR warmup '
+                             '(0 = no warmup; applies to dense AdamW only)')
+    parser.add_argument('--min_lr_ratio', type=float, default=0.05,
+                        help='Minimum LR as a fraction of peak LR at the end of cosine decay '
+                             '(e.g. 0.05 means LR decays to 5%% of --lr)')
 
     # Sparse optimizer.
     parser.add_argument('--sparse_lr', type=float, default=0.05,
@@ -328,6 +336,11 @@ def main() -> None:
         "hidden": args.d_model,
     }
 
+    steps_per_epoch = len(train_loader)
+    total_steps = args.num_epochs * steps_per_epoch
+    logging.info(f"Scheduler: steps_per_epoch≈{steps_per_epoch}, total_steps≈{total_steps}, "
+                 f"warmup_ratio={args.warmup_ratio}, min_lr_ratio={args.min_lr_ratio}")
+
     trainer = PCVRHyFormerRankingTrainer(
         model=model,
         train_loader=train_loader,
@@ -350,6 +363,9 @@ def main() -> None:
         ns_groups_path=args.ns_groups_json if args.ns_groups_json and os.path.exists(args.ns_groups_json) else None,
         eval_every_n_steps=args.eval_every_n_steps,
         train_config=vars(args),
+        total_steps=total_steps,
+        warmup_ratio=args.warmup_ratio,
+        min_lr_ratio=args.min_lr_ratio,
     )
 
     trainer.train()

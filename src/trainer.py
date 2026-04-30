@@ -5,6 +5,7 @@ uses pointwise BCE / Focal loss and evaluates Binary AUC + binary logloss.
 """
 
 import os
+import math
 import glob
 import shutil
 import logging
@@ -58,6 +59,9 @@ class PCVRHyFormerRankingTrainer:
         ns_groups_path: Optional[str] = None,
         eval_every_n_steps: int = 0,
         train_config: Optional[Dict[str, Any]] = None,
+        total_steps: int = 0,
+        warmup_ratio: float = 0.05,
+        min_lr_ratio: float = 0.05,
     ) -> None:
         self.model: nn.Module = model
         self.train_loader: DataLoader = train_loader
@@ -107,6 +111,26 @@ class PCVRHyFormerRankingTrainer:
         self.ckpt_params: Dict[str, Any] = ckpt_params or {}
         self.eval_every_n_steps: int = eval_every_n_steps
         self.train_config: Optional[Dict[str, Any]] = train_config
+
+        # Dense LR scheduler: linear warmup → cosine decay (dense optimizer only).
+        # Sparse optimizer (Adagrad) is self-adaptive and does not need a schedule.
+        if total_steps > 0 and warmup_ratio > 0:
+            warmup_steps = max(1, int(total_steps * warmup_ratio))
+            _min_lr_ratio = min_lr_ratio
+
+            def _lr_lambda(current_step: int) -> float:
+                if current_step < warmup_steps:
+                    return current_step / warmup_steps
+                progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+                return max(_min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+            self.dense_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = (
+                torch.optim.lr_scheduler.LambdaLR(self.dense_optimizer, _lr_lambda)
+            )
+            logging.info(f"LR scheduler: warmup {warmup_steps} steps, "
+                         f"cosine decay to {min_lr_ratio:.0%} of peak, total {total_steps} steps")
+        else:
+            self.dense_scheduler = None
 
         # 混合精度训练
         self.mixed_precision = True
@@ -472,6 +496,8 @@ class PCVRHyFormerRankingTrainer:
         self.dense_optimizer.step()
         if self.sparse_optimizer is not None:
             self.sparse_optimizer.step()
+        if self.dense_scheduler is not None:
+            self.dense_scheduler.step()
 
         return loss.item(), total_norm
 

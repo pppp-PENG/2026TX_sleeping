@@ -11,6 +11,9 @@ python3 -u "${SCRIPT_DIR}/train.py" \
     --ns_groups_json "" \
     --emb_skip_threshold 1000000 \
     --num_workers 8 \
+    --dropout_rate 0.1 \
+    --warmup_ratio 0.05 \
+    --min_lr_ratio 0.05 \
     "$@"
 
 # ---- Alternative config: GroupNSTokenizer driven by ns_groups.json ----
