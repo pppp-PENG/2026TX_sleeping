@@ -71,6 +71,7 @@ _FALLBACK_MODEL_CFG = {
 }
 
 _FALLBACK_SEQ_MAX_LENS = 'seq_a:256,seq_b:256,seq_c:512,seq_d:512'
+_FALLBACK_SEQ_STAT_MODE = 'basic'
 _FALLBACK_BATCH_SIZE = 256
 _FALLBACK_NUM_WORKERS = 16
 
@@ -229,6 +230,7 @@ def build_model(
         seq_vocab_sizes=dataset.seq_domain_vocab_sizes,
         user_ns_groups=user_ns_groups,
         item_ns_groups=item_ns_groups,
+        seq_stat_dims=dataset.seq_stat_dims,
         **model_cfg,
     ).to(device)
 
@@ -331,6 +333,8 @@ def main() -> None:
     sml_str = train_config.get('seq_max_lens', _FALLBACK_SEQ_MAX_LENS)
     seq_max_lens = _parse_seq_max_lens(sml_str)
     logging.info(f"seq_max_lens: {seq_max_lens}")
+    seq_stat_mode = train_config.get('seq_stat_mode', _FALLBACK_SEQ_STAT_MODE)
+    logging.info(f"seq_stat_mode: {seq_stat_mode}")
 
     # ---- Data loading: reuse batch_size / num_workers from training config ----
     batch_size = int(train_config.get('batch_size', _FALLBACK_BATCH_SIZE))
@@ -344,6 +348,7 @@ def main() -> None:
         shuffle=False,
         buffer_batches=0,
         is_training=False,
+        seq_stat_mode=seq_stat_mode,
     )
     total_test_samples = test_dataset.num_rows
     logging.info(f"Total test samples: {total_test_samples}")

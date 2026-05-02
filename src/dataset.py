@@ -138,6 +138,13 @@ _STAT_BUCKET_1H = int(np.searchsorted(BUCKET_BOUNDARIES, 3600)) + 1    # ≤ 1 h
 _STAT_BUCKET_1D = int(np.searchsorted(BUCKET_BOUNDARIES, 86400)) + 1   # ≤ 1 day
 _STAT_BUCKET_7D = int(np.searchsorted(BUCKET_BOUNDARIES, 604800)) + 1  # ≤ 7 days
 
+_EXT_STAT_WINDOWS = (3600, 21600, 86400, 259200, 604800, 2592000)
+_EXT_STAT_BUCKETS = np.array([
+    int(np.searchsorted(BUCKET_BOUNDARIES, w)) + 1
+    for w in _EXT_STAT_WINDOWS
+], dtype=np.int64)
+_EXT_STAT_MAX_AGE = float(BUCKET_BOUNDARIES[-1])
+
 
 class PCVRParquetDataset(IterableDataset):
     """PCVR dataset that reads raw multi-column Parquet directly.
@@ -160,6 +167,7 @@ class PCVRParquetDataset(IterableDataset):
         row_group_range: Optional[Tuple[int, int]] = None,
         clip_vocab: bool = True,
         is_training: bool = True,
+        seq_stat_mode: str = 'basic',
     ) -> None:
         """
         Args:
@@ -177,8 +185,15 @@ class PCVRParquetDataset(IterableDataset):
             clip_vocab: if True, clip out-of-bound ids to 0; if False, raise.
             is_training: if True, derive ``label`` from ``label_type == 2``;
                 if False, return an all-zeros label column.
+            seq_stat_mode: one of ``none``, ``basic`` or ``extended``. ``basic``
+                preserves the original 4 count features; ``extended`` adds
+                recency, window ratios, truncation and side-info coverage
+                features for ablation.
         """
         super().__init__()
+        if seq_stat_mode not in ('none', 'basic', 'extended'):
+            raise ValueError(
+                f"seq_stat_mode must be one of none/basic/extended, got {seq_stat_mode!r}")
 
         # Accept either a directory or a single file path.
         if os.path.isdir(parquet_path):
@@ -195,6 +210,7 @@ class PCVRParquetDataset(IterableDataset):
         self.buffer_batches = buffer_batches
         self.clip_vocab = clip_vocab
         self.is_training = is_training
+        self.seq_stat_mode = seq_stat_mode
         # Out-of-bound statistics:
         #   {(group, col_idx): {'count': N, 'max': M, 'min_oob': M, 'vocab': V}}
         self._oob_stats: Dict[Tuple[str, int], Dict[str, int]] = {}
@@ -214,6 +230,7 @@ class PCVRParquetDataset(IterableDataset):
 
         # Load schema.json.
         self._load_schema(schema_path, seq_max_lens or {})
+        self.seq_stat_dims = self._build_seq_stat_dims()
 
         # ---- Pre-compute column index lookup ----
         pf = pq.ParquetFile(self._parquet_files[0])
@@ -274,7 +291,9 @@ class PCVRParquetDataset(IterableDataset):
         logging.info(
             f"PCVRParquetDataset: {self.num_rows} rows from "
             f"{len(self._parquet_files)} file(s), batch_size={batch_size}, "
-            f"buffer_batches={buffer_batches}, shuffle={shuffle}")
+            f"buffer_batches={buffer_batches}, shuffle={shuffle}, "
+            f"seq_stat_mode={self.seq_stat_mode}")
+        logging.info(f"seq_stat_dims: {self.seq_stat_dims}")
 
         logging.info(f"cols: {self._col_idx.keys()}")
 
@@ -337,6 +356,17 @@ class PCVRParquetDataset(IterableDataset):
 
             # max_len: from seq_max_lens arg; unspecified domains fall back to 256.
             self._seq_maxlen[domain] = seq_max_lens.get(domain, 256)
+
+    def _build_seq_stat_dims(self) -> Dict[str, int]:
+        """Return the per-domain dense stat dimensions for the configured mode."""
+        if self.seq_stat_mode == 'none':
+            return {domain: 0 for domain in self.seq_domains}
+        if self.seq_stat_mode == 'basic':
+            return {domain: 4 for domain in self.seq_domains}
+        return {
+            domain: 18 + len(self.sideinfo_fids[domain])
+            for domain in self.seq_domains
+        }
 
     def __len__(self) -> int:
         # Ceiling per Row Group; this is an upper bound on the true batch count.
@@ -602,6 +632,7 @@ class PCVRParquetDataset(IterableDataset):
             out[:] = 0
             lengths = self._buf_seq_lens[domain][:B]
             lengths[:] = 0
+            raw_lengths = np.zeros(B, dtype=np.int64)
 
             # Fused path: first collect (offsets, values, vocab_size, col_idx)
             # for every side-info column, then fill the buffer in a single pass.
@@ -619,6 +650,8 @@ class PCVRParquetDataset(IterableDataset):
                         continue
                     ul = min(rl, max_len)
                     out[i, c, :ul] = vals[s:s + ul]
+                    if rl > raw_lengths[i]:
+                        raw_lengths[i] = rl
                     if ul > lengths[i]:
                         lengths[i] = ul
 
@@ -678,20 +711,96 @@ class PCVRParquetDataset(IterableDataset):
 
             result[f'{domain}_time_bucket'] = torch.from_numpy(time_bucket.copy())
 
-            # Sequence count statistics: (B, 4) float32, log1p-normalized.
-            # [0] count_total  [1] count_1h  [2] count_1d  [3] count_7d
-            stat = np.empty((B, 4), dtype=np.float32)
-            stat[:, 0] = np.log1p(lengths)
-            if ts_ci is not None:
-                valid = time_bucket >= 1  # (B, max_len), excludes padding
-                stat[:, 1] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1H), axis=1))
-                stat[:, 2] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1D), axis=1))
-                stat[:, 3] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_7D), axis=1))
-            else:
-                stat[:, 1:] = 0.0
-            result[f'{domain}_stat'] = torch.from_numpy(stat)
+            if self.seq_stat_mode == 'basic':
+                # Sequence count statistics: (B, 4) float32, log1p-normalized.
+                # [0] count_total  [1] count_1h  [2] count_1d  [3] count_7d
+                stat = np.empty((B, 4), dtype=np.float32)
+                stat[:, 0] = np.log1p(lengths)
+                if ts_ci is not None:
+                    valid = time_bucket >= 1  # (B, max_len), excludes padding
+                    stat[:, 1] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1H), axis=1))
+                    stat[:, 2] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1D), axis=1))
+                    stat[:, 3] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_7D), axis=1))
+                else:
+                    stat[:, 1:] = 0.0
+                result[f'{domain}_stat'] = torch.from_numpy(stat)
+            elif self.seq_stat_mode == 'extended':
+                result[f'{domain}_stat'] = torch.from_numpy(
+                    self._build_extended_seq_stat(
+                        out=out,
+                        lengths=lengths,
+                        raw_lengths=raw_lengths,
+                        time_bucket=time_bucket,
+                        max_len=max_len,
+                        has_timestamp=ts_ci is not None,
+                    ))
 
         return result
+
+    def _build_extended_seq_stat(
+        self,
+        out: "npt.NDArray[np.int64]",
+        lengths: "npt.NDArray[np.int64]",
+        raw_lengths: "npt.NDArray[np.int64]",
+        time_bucket: "npt.NDArray[np.int64]",
+        max_len: int,
+        has_timestamp: bool,
+    ) -> "npt.NDArray[np.float32]":
+        """Build richer per-domain sequence stats for lightweight ablations.
+
+        Layout:
+          0 total count (log1p)
+          1..6 window counts for 1h/6h/1d/3d/7d/30d (log1p)
+          7..12 same windows as ratios over valid count
+          13 most recent behavior age, normalized log1p seconds
+          14 average interval between behaviors, normalized log1p seconds
+          15 is empty
+          16 was truncated before max_len
+          17 valid token ratio after truncation
+          18.. side-info non-zero ratios, one value per side-info field
+        """
+        B, n_feats, _ = out.shape
+        stat = np.zeros((B, 18 + n_feats), dtype=np.float32)
+        lengths_f = lengths.astype(np.float32)
+        denom = np.maximum(lengths_f, 1.0)
+
+        stat[:, 0] = np.log1p(lengths)
+        stat[:, 15] = (lengths == 0).astype(np.float32)
+        stat[:, 16] = (raw_lengths > max_len).astype(np.float32)
+        stat[:, 17] = lengths_f / float(max_len)
+
+        valid = time_bucket >= 1 if has_timestamp else np.zeros_like(time_bucket, dtype=bool)
+        if has_timestamp:
+            window_counts = np.stack([
+                np.sum(valid & (time_bucket <= bucket), axis=1)
+                for bucket in _EXT_STAT_BUCKETS
+            ], axis=1).astype(np.float32)
+            stat[:, 1:7] = np.log1p(window_counts)
+            stat[:, 7:13] = window_counts / denom.reshape(-1, 1)
+
+            masked = np.where(valid, time_bucket, NUM_TIME_BUCKETS + 1)
+            min_bucket = masked.min(axis=1)
+            min_bucket[min_bucket > NUM_TIME_BUCKETS] = 0
+            recent_age = np.where(
+                min_bucket > 0,
+                BUCKET_BOUNDARIES[np.maximum(min_bucket - 1, 0)],
+                0,
+            ).astype(np.float32)
+            stat[:, 13] = np.log1p(recent_age) / np.log1p(_EXT_STAT_MAX_AGE)
+
+            span_bucket = np.where(valid, time_bucket, 0).max(axis=1)
+            span_age = np.where(
+                span_bucket > 0,
+                BUCKET_BOUNDARIES[np.maximum(span_bucket - 1, 0)],
+                0,
+            ).astype(np.float32)
+            avg_interval = span_age / np.maximum(lengths_f - 1.0, 1.0)
+            avg_interval[lengths < 2] = 0.0
+            stat[:, 14] = np.log1p(avg_interval) / np.log1p(_EXT_STAT_MAX_AGE)
+
+        nonzero_counts = np.sum(out != 0, axis=2).astype(np.float32)
+        stat[:, 18:] = nonzero_counts / denom.reshape(-1, 1)
+        return stat
 
 
 def get_pcvr_data(
@@ -706,6 +815,7 @@ def get_pcvr_data(
     seed: int = 42,
     clip_vocab: bool = True,
     seq_max_lens: Optional[Dict[str, int]] = None,
+    seq_stat_mode: str = 'basic',
     **kwargs: Any,
 ) -> Tuple[DataLoader, DataLoader, PCVRParquetDataset]:
     """Create train / valid DataLoaders from raw multi-column Parquet files.
@@ -754,6 +864,7 @@ def get_pcvr_data(
         buffer_batches=buffer_batches,
         row_group_range=(0, n_train_rgs),
         clip_vocab=clip_vocab,
+        seq_stat_mode=seq_stat_mode,
     )
 
     use_cuda = torch.cuda.is_available()
@@ -776,6 +887,7 @@ def get_pcvr_data(
         buffer_batches=0,
         row_group_range=(n_train_rgs, total_rgs),
         clip_vocab=clip_vocab,
+        seq_stat_mode=seq_stat_mode,
     )
     valid_loader = DataLoader(
         valid_dataset, batch_size=None,

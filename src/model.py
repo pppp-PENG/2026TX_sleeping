@@ -16,7 +16,7 @@ class ModelInput(NamedTuple):
     seq_data: dict        # {domain: tensor [B, S, L]}
     seq_lens: dict        # {domain: tensor [B]}
     seq_time_buckets: dict  # {domain: tensor [B, L]}
-    seq_stats: dict       # {domain: tensor [B, 4]} log1p counts; empty dict if unused
+    seq_stats: dict       # {domain: tensor [B, stat_dim]}; empty dict if unused
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1230,6 +1230,7 @@ class PCVRHyFormer(nn.Module):
         ns_tokenizer_type: str = 'rankmixer',
         user_ns_tokens: int = 0,
         item_ns_tokens: int = 0,
+        seq_stat_dims: Optional["dict[str, int]"] = None,
     ) -> None:
         super().__init__()
 
@@ -1240,6 +1241,10 @@ class PCVRHyFormer(nn.Module):
         self.seq_domains = sorted(seq_vocab_sizes.keys())  # deterministic order
         self.num_sequences = len(self.seq_domains)
         self.num_time_buckets = num_time_buckets
+        self.seq_stat_dims = {
+            domain: int((seq_stat_dims or {}).get(domain, 4))
+            for domain in self.seq_domains
+        }
         self.rank_mixer_mode = rank_mixer_mode
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
@@ -1378,14 +1383,13 @@ class PCVRHyFormer(nn.Module):
         if num_time_buckets > 0:
             self.time_embedding = nn.Embedding(num_time_buckets, d_model, padding_idx=0)
 
-        # ================== Sequence Count Statistics Projection ==================
-        # 4 log1p-normalized counts: total, ≤1h, ≤1d, ≤7d.
-        # One lightweight projection per domain; output is broadcast-added to all
-        # sequence positions so the mean-pool in query generation picks it up.
-        _num_stat_feats = 4
+        # ================== Sequence Dense Statistics Projection ==================
+        # One lightweight projection per enabled domain; output is broadcast-added
+        # to all sequence positions so the mean-pool in query generation picks it up.
         self.seq_stat_projs = nn.ModuleList([
-            nn.Sequential(nn.Linear(_num_stat_feats, d_model), nn.SiLU(), nn.LayerNorm(d_model))
-            for _ in self.seq_domains
+            nn.Sequential(nn.Linear(self.seq_stat_dims[domain], d_model), nn.SiLU(), nn.LayerNorm(d_model))
+            if self.seq_stat_dims[domain] > 0 else nn.Identity()
+            for domain in self.seq_domains
         ])
 
         # ================== HyFormer Components ==================
@@ -1668,7 +1672,7 @@ class PCVRHyFormer(nn.Module):
                 self._seq_embs[domain], self._seq_proj[domain],
                 self._seq_is_id[domain], self._seq_emb_index[domain],
                 inputs.seq_time_buckets[domain])
-            if domain in inputs.seq_stats:
+            if domain in inputs.seq_stats and self.seq_stat_dims[domain] > 0:
                 stat_emb = self.seq_stat_projs[i](
                     inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
                 tokens = tokens + stat_emb.unsqueeze(1)          # broadcast → (B, L, D)
@@ -1714,7 +1718,7 @@ class PCVRHyFormer(nn.Module):
                 self._seq_embs[domain], self._seq_proj[domain],
                 self._seq_is_id[domain], self._seq_emb_index[domain],
                 inputs.seq_time_buckets[domain])
-            if domain in inputs.seq_stats:
+            if domain in inputs.seq_stats and self.seq_stat_dims[domain] > 0:
                 stat_emb = self.seq_stat_projs[i](
                     inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
                 tokens = tokens + stat_emb.unsqueeze(1)          # broadcast → (B, L, D)

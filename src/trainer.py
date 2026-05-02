@@ -275,6 +275,10 @@ class PCVRHyFormerRankingTrainer:
            razor-close score that tripped ``is_likely_new_best`` but not
            ``EarlyStopping``'s own gate does not create a stray dir.
         """
+        if torch.cuda.is_available():
+            peak_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            logging.info(f"Validation telemetry | peak_cuda_mem_mb: {peak_mb:.1f}")
+
         old_best = self.early_stopping.best_score
         is_likely_new_best = (
             old_best is None
