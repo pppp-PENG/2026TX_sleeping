@@ -90,6 +90,12 @@ def parse_args() -> argparse.Namespace:
                              'none disables *_stat features; basic keeps the '
                              'original 4 count stats; extended adds recency, '
                              'window ratios, truncation and coverage stats.')
+    parser.add_argument('--seq_item_cross_mode', type=str, default='none',
+                        choices=['none', 'item_id'],
+                        help='Target-item/history cross feature mode. '
+                             'item_id appends exact-match stats between item_id '
+                             'and every sequence side-info field; requires '
+                             '--seq_stat_mode extended.')
 
     # Model hyperparameters.
     parser.add_argument('--d_model', type=int, default=64,
@@ -264,6 +270,7 @@ def main() -> None:
         seed=args.seed,
         seq_max_lens=seq_max_lens,
         seq_stat_mode=args.seq_stat_mode,
+        seq_item_cross_mode=args.seq_item_cross_mode,
     )
 
     # ---- NS groups ----

@@ -72,6 +72,7 @@ _FALLBACK_MODEL_CFG = {
 
 _FALLBACK_SEQ_MAX_LENS = 'seq_a:256,seq_b:256,seq_c:512,seq_d:512'
 _FALLBACK_SEQ_STAT_MODE = 'basic'
+_FALLBACK_SEQ_ITEM_CROSS_MODE = 'none'
 _FALLBACK_BATCH_SIZE = 256
 _FALLBACK_NUM_WORKERS = 16
 
@@ -335,6 +336,9 @@ def main() -> None:
     logging.info(f"seq_max_lens: {seq_max_lens}")
     seq_stat_mode = train_config.get('seq_stat_mode', _FALLBACK_SEQ_STAT_MODE)
     logging.info(f"seq_stat_mode: {seq_stat_mode}")
+    seq_item_cross_mode = train_config.get(
+        'seq_item_cross_mode', _FALLBACK_SEQ_ITEM_CROSS_MODE)
+    logging.info(f"seq_item_cross_mode: {seq_item_cross_mode}")
 
     # ---- Data loading: reuse batch_size / num_workers from training config ----
     batch_size = int(train_config.get('batch_size', _FALLBACK_BATCH_SIZE))
@@ -349,6 +353,7 @@ def main() -> None:
         buffer_batches=0,
         is_training=False,
         seq_stat_mode=seq_stat_mode,
+        seq_item_cross_mode=seq_item_cross_mode,
     )
     total_test_samples = test_dataset.num_rows
     logging.info(f"Total test samples: {total_test_samples}")

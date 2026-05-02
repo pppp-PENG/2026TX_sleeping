@@ -5,7 +5,6 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
 # ---- Active config: RankMixer NS tokenizer (no ns_groups.json required) ----
 python3 -u "${SCRIPT_DIR}/train.py" \
     --ns_tokenizer_type rankmixer \
-    --seq_stat_mode extended \
     --user_ns_tokens 5 \
     --item_ns_tokens 2 \
     --num_queries 2 \
@@ -15,6 +14,8 @@ python3 -u "${SCRIPT_DIR}/train.py" \
     --dropout_rate 0.1 \
     --warmup_ratio 0.05 \
     --min_lr_ratio 0.05 \
+    --seq_stat_mode extended \
+    --seq_item_cross_mode none \
     "$@"
 
 # ---- Alternative config: GroupNSTokenizer driven by ns_groups.json ----

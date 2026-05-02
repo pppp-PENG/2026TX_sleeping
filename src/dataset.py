@@ -168,6 +168,7 @@ class PCVRParquetDataset(IterableDataset):
         clip_vocab: bool = True,
         is_training: bool = True,
         seq_stat_mode: str = 'basic',
+        seq_item_cross_mode: str = 'none',
     ) -> None:
         """
         Args:
@@ -189,11 +190,19 @@ class PCVRParquetDataset(IterableDataset):
                 preserves the original 4 count features; ``extended`` adds
                 recency, window ratios, truncation and side-info coverage
                 features for ablation.
+            seq_item_cross_mode: one of ``none`` or ``item_id``. ``item_id``
+                appends target item-id/history exact-match stats to the
+                extended sequence stats.
         """
         super().__init__()
         if seq_stat_mode not in ('none', 'basic', 'extended'):
             raise ValueError(
                 f"seq_stat_mode must be one of none/basic/extended, got {seq_stat_mode!r}")
+        if seq_item_cross_mode not in ('none', 'item_id'):
+            raise ValueError(
+                f"seq_item_cross_mode must be one of none/item_id, got {seq_item_cross_mode!r}")
+        if seq_item_cross_mode != 'none' and seq_stat_mode != 'extended':
+            raise ValueError("seq_item_cross_mode requires seq_stat_mode='extended'")
 
         # Accept either a directory or a single file path.
         if os.path.isdir(parquet_path):
@@ -211,6 +220,7 @@ class PCVRParquetDataset(IterableDataset):
         self.clip_vocab = clip_vocab
         self.is_training = is_training
         self.seq_stat_mode = seq_stat_mode
+        self.seq_item_cross_mode = seq_item_cross_mode
         # Out-of-bound statistics:
         #   {(group, col_idx): {'count': N, 'max': M, 'min_oob': M, 'vocab': V}}
         self._oob_stats: Dict[Tuple[str, int], Dict[str, int]] = {}
@@ -292,7 +302,8 @@ class PCVRParquetDataset(IterableDataset):
             f"PCVRParquetDataset: {self.num_rows} rows from "
             f"{len(self._parquet_files)} file(s), batch_size={batch_size}, "
             f"buffer_batches={buffer_batches}, shuffle={shuffle}, "
-            f"seq_stat_mode={self.seq_stat_mode}")
+            f"seq_stat_mode={self.seq_stat_mode}, "
+            f"seq_item_cross_mode={self.seq_item_cross_mode}")
         logging.info(f"seq_stat_dims: {self.seq_stat_dims}")
 
         logging.info(f"cols: {self._col_idx.keys()}")
@@ -364,7 +375,11 @@ class PCVRParquetDataset(IterableDataset):
         if self.seq_stat_mode == 'basic':
             return {domain: 4 for domain in self.seq_domains}
         return {
-            domain: 18 + len(self.sideinfo_fids[domain])
+            domain: (
+                18 + len(self.sideinfo_fids[domain])
+                + (3 * len(self.sideinfo_fids[domain])
+                   if self.seq_item_cross_mode == 'item_id' else 0)
+            )
             for domain in self.seq_domains
         }
 
@@ -554,6 +569,9 @@ class PCVRParquetDataset(IterableDataset):
         else:
             labels = np.zeros(B, dtype=np.int64)
         user_ids = batch.column(self._col_idx['user_id']).to_pylist()
+        item_ids = batch.column(self._col_idx['item_id']).fill_null(0).to_numpy(
+            zero_copy_only=False).astype(np.int64)
+        item_ids[item_ids <= 0] = 0
 
         # ---- user_int: write into pre-allocated buffer ----
         # Note: null -> 0 (via fill_null), -1 -> 0 (via arr<=0); missing values
@@ -733,6 +751,7 @@ class PCVRParquetDataset(IterableDataset):
                         time_bucket=time_bucket,
                         max_len=max_len,
                         has_timestamp=ts_ci is not None,
+                        item_ids=item_ids,
                     ))
 
         return result
@@ -745,6 +764,7 @@ class PCVRParquetDataset(IterableDataset):
         time_bucket: "npt.NDArray[np.int64]",
         max_len: int,
         has_timestamp: bool,
+        item_ids: "npt.NDArray[np.int64]",
     ) -> "npt.NDArray[np.float32]":
         """Build richer per-domain sequence stats for lightweight ablations.
 
@@ -758,9 +778,12 @@ class PCVRParquetDataset(IterableDataset):
           16 was truncated before max_len
           17 valid token ratio after truncation
           18.. side-info non-zero ratios, one value per side-info field
+          optional item-id crosses:
+            match_count, has_match, recent_match_age for each side-info field
         """
         B, n_feats, _ = out.shape
-        stat = np.zeros((B, 18 + n_feats), dtype=np.float32)
+        cross_dim = 3 * n_feats if self.seq_item_cross_mode == 'item_id' else 0
+        stat = np.zeros((B, 18 + n_feats + cross_dim), dtype=np.float32)
         lengths_f = lengths.astype(np.float32)
         denom = np.maximum(lengths_f, 1.0)
 
@@ -799,7 +822,26 @@ class PCVRParquetDataset(IterableDataset):
             stat[:, 14] = np.log1p(avg_interval) / np.log1p(_EXT_STAT_MAX_AGE)
 
         nonzero_counts = np.sum(out != 0, axis=2).astype(np.float32)
-        stat[:, 18:] = nonzero_counts / denom.reshape(-1, 1)
+        stat[:, 18:18 + n_feats] = nonzero_counts / denom.reshape(-1, 1)
+        if self.seq_item_cross_mode == 'item_id':
+            base = 18 + n_feats
+            item_ids_2d = item_ids.reshape(B, 1)
+            for c in range(n_feats):
+                matches = (out[:, c, :] == item_ids_2d) & (item_ids_2d > 0)
+                match_count = np.sum(matches, axis=1).astype(np.float32)
+                stat[:, base + c] = np.log1p(match_count)
+                stat[:, base + n_feats + c] = (match_count > 0).astype(np.float32)
+                if has_timestamp:
+                    masked = np.where(matches, time_bucket, NUM_TIME_BUCKETS + 1)
+                    min_bucket = masked.min(axis=1)
+                    min_bucket[min_bucket > NUM_TIME_BUCKETS] = 0
+                    match_age = np.where(
+                        min_bucket > 0,
+                        BUCKET_BOUNDARIES[np.maximum(min_bucket - 1, 0)],
+                        0,
+                    ).astype(np.float32)
+                    stat[:, base + 2 * n_feats + c] = (
+                        np.log1p(match_age) / np.log1p(_EXT_STAT_MAX_AGE))
         return stat
 
 
@@ -816,6 +858,7 @@ def get_pcvr_data(
     clip_vocab: bool = True,
     seq_max_lens: Optional[Dict[str, int]] = None,
     seq_stat_mode: str = 'basic',
+    seq_item_cross_mode: str = 'none',
     **kwargs: Any,
 ) -> Tuple[DataLoader, DataLoader, PCVRParquetDataset]:
     """Create train / valid DataLoaders from raw multi-column Parquet files.
@@ -865,6 +908,7 @@ def get_pcvr_data(
         row_group_range=(0, n_train_rgs),
         clip_vocab=clip_vocab,
         seq_stat_mode=seq_stat_mode,
+        seq_item_cross_mode=seq_item_cross_mode,
     )
 
     use_cuda = torch.cuda.is_available()
@@ -888,6 +932,7 @@ def get_pcvr_data(
         row_group_range=(n_train_rgs, total_rgs),
         clip_vocab=clip_vocab,
         seq_stat_mode=seq_stat_mode,
+        seq_item_cross_mode=seq_item_cross_mode,
     )
     valid_loader = DataLoader(
         valid_dataset, batch_size=None,
