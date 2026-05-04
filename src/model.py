@@ -1231,8 +1231,12 @@ class PCVRHyFormer(nn.Module):
         user_ns_tokens: int = 0,
         item_ns_tokens: int = 0,
         seq_stat_dims: Optional["dict[str, int]"] = None,
+        seq_stat_injection: str = 'add',
     ) -> None:
         super().__init__()
+        if seq_stat_injection not in ('add', 'token'):
+            raise ValueError(
+                f"seq_stat_injection must be one of add/token, got {seq_stat_injection!r}")
 
         self.d_model = d_model
         self.emb_dim = emb_dim
@@ -1245,6 +1249,7 @@ class PCVRHyFormer(nn.Module):
             domain: int((seq_stat_dims or {}).get(domain, 4))
             for domain in self.seq_domains
         }
+        self.seq_stat_injection = seq_stat_injection
         self.rank_mixer_mode = rank_mixer_mode
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
@@ -1596,6 +1601,28 @@ class PCVRHyFormer(nn.Module):
         idx = torch.arange(max_len, device=device).unsqueeze(0)  # (1, max_len)
         return idx >= seq_len.unsqueeze(1)  # (B, max_len)
 
+    def _inject_seq_stats(
+        self,
+        domain_idx: int,
+        domain: str,
+        tokens: torch.Tensor,
+        mask: torch.Tensor,
+        inputs: ModelInput,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Inject per-domain dense stats either by addition or as a stat token."""
+        if domain not in inputs.seq_stats or self.seq_stat_dims[domain] <= 0:
+            return tokens, mask
+
+        stat_emb = self.seq_stat_projs[domain_idx](
+            inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
+        if self.seq_stat_injection == 'add':
+            return tokens + stat_emb.unsqueeze(1), mask
+
+        stat_token = stat_emb.unsqueeze(1)  # (B, 1, D)
+        stat_mask = torch.zeros(
+            mask.shape[0], 1, dtype=mask.dtype, device=mask.device)
+        return torch.cat([stat_token, tokens], dim=1), torch.cat([stat_mask, mask], dim=1)
+
     def _run_multi_seq_blocks(
         self,
         q_tokens_list: list,
@@ -1672,12 +1699,9 @@ class PCVRHyFormer(nn.Module):
                 self._seq_embs[domain], self._seq_proj[domain],
                 self._seq_is_id[domain], self._seq_emb_index[domain],
                 inputs.seq_time_buckets[domain])
-            if domain in inputs.seq_stats and self.seq_stat_dims[domain] > 0:
-                stat_emb = self.seq_stat_projs[i](
-                    inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
-                tokens = tokens + stat_emb.unsqueeze(1)          # broadcast → (B, L, D)
-            seq_tokens_list.append(tokens)
             mask = self._make_padding_mask(inputs.seq_lens[domain], inputs.seq_data[domain].shape[2])
+            tokens, mask = self._inject_seq_stats(i, domain, tokens, mask, inputs)
+            seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
         # 3. Generate independent Q tokens per sequence via MultiSeqQueryGenerator
@@ -1718,12 +1742,9 @@ class PCVRHyFormer(nn.Module):
                 self._seq_embs[domain], self._seq_proj[domain],
                 self._seq_is_id[domain], self._seq_emb_index[domain],
                 inputs.seq_time_buckets[domain])
-            if domain in inputs.seq_stats and self.seq_stat_dims[domain] > 0:
-                stat_emb = self.seq_stat_projs[i](
-                    inputs.seq_stats[domain].to(tokens.dtype))  # (B, D)
-                tokens = tokens + stat_emb.unsqueeze(1)          # broadcast → (B, L, D)
-            seq_tokens_list.append(tokens)
             mask = self._make_padding_mask(inputs.seq_lens[domain], inputs.seq_data[domain].shape[2])
+            tokens, mask = self._inject_seq_stats(i, domain, tokens, mask, inputs)
+            seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)

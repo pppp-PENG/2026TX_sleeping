@@ -96,6 +96,11 @@ def parse_args() -> argparse.Namespace:
                              'item_id appends exact-match stats between item_id '
                              'and every sequence side-info field; requires '
                              '--seq_stat_mode extended.')
+    parser.add_argument('--seq_stat_injection', type=str, default='add',
+                        choices=['add', 'token'],
+                        help='How sequence dense stats enter the sequence encoder: '
+                             'add broadcasts the projected stats to every behavior '
+                             'token; token prepends one learned stat token per domain.')
 
     # Model hyperparameters.
     parser.add_argument('--d_model', type=int, default=64,
@@ -324,6 +329,7 @@ def main() -> None:
         "ns_tokenizer_type": args.ns_tokenizer_type,
         "user_ns_tokens": args.user_ns_tokens,
         "item_ns_tokens": args.item_ns_tokens,
+        "seq_stat_injection": args.seq_stat_injection,
     }
 
     model = PCVRHyFormer(**model_args).to(args.device)
