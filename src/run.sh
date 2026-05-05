@@ -16,7 +16,8 @@ python3 -u "${SCRIPT_DIR}/train.py" \
     --min_lr_ratio 0.05 \
     --seq_stat_mode extended \
     --seq_item_cross_mode none \
-    --seq_stat_injection token \
+    --seq_stat_injection add \
+    --query_pooling_mode mean \
     "$@"
 
 # ---- Alternative config: GroupNSTokenizer driven by ns_groups.json ----

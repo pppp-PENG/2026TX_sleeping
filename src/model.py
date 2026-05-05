@@ -428,14 +428,22 @@ class MultiSeqQueryGenerator(nn.Module):
         num_ns: int,
         num_queries: int,
         num_sequences: int,
-        hidden_mult: int = 4
+        hidden_mult: int = 4,
+        pooling_mode: str = 'mean',
+        recent_k: int = 32,
     ) -> None:
         super().__init__()
+        if pooling_mode not in ('mean', 'mean_recent'):
+            raise ValueError(
+                f"pooling_mode must be one of mean/mean_recent, got {pooling_mode!r}")
         self.num_queries = num_queries
         self.num_sequences = num_sequences
         self.d_model = d_model
+        self.pooling_mode = pooling_mode
+        self.recent_k = recent_k
 
-        global_info_dim = (num_ns + 1) * d_model
+        num_seq_summary_tokens = 2 if pooling_mode == 'mean_recent' else 1
+        global_info_dim = (num_ns + num_seq_summary_tokens) * d_model
 
         # LayerNorm on global_info to prevent gradient explosion from large-dim concat
         self.global_info_norm = nn.LayerNorm(global_info_dim)
@@ -483,8 +491,26 @@ class MultiSeqQueryGenerator(nn.Module):
             seq_count = valid_mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
             seq_pooled = seq_sum / seq_count  # (B, D)
 
-            # GlobalInfo_i = Concat(NS_flat, seq_pooled_i)
-            global_info = torch.cat([ns_flat, seq_pooled], dim=-1)  # (B, (M+1)*D)
+            seq_summary_parts = [seq_pooled]
+            if self.pooling_mode == 'mean_recent':
+                L_i = seq_tokens_list[i].shape[1]
+                idx = torch.arange(L_i, device=seq_tokens_list[i].device).unsqueeze(0)
+                valid_len = valid_mask.sum(dim=1)
+                recent_len = torch.clamp(valid_len, max=self.recent_k)
+                recent_start = valid_len - recent_len
+                recent_mask = (
+                    (idx >= recent_start.unsqueeze(1))
+                    & (idx < valid_len.unsqueeze(1))
+                    & valid_mask
+                )
+                recent_mask_expanded = recent_mask.unsqueeze(-1).float()
+                recent_sum = (seq_tokens_list[i] * recent_mask_expanded).sum(dim=1)
+                recent_count = recent_mask_expanded.sum(dim=1).clamp(min=1)
+                recent_pooled = recent_sum / recent_count
+                seq_summary_parts.append(recent_pooled)
+
+            # GlobalInfo_i = Concat(NS_flat, sequence summaries)
+            global_info = torch.cat([ns_flat] + seq_summary_parts, dim=-1)
             global_info = self.global_info_norm(global_info)
 
             # Generate N query tokens
@@ -1232,6 +1258,8 @@ class PCVRHyFormer(nn.Module):
         item_ns_tokens: int = 0,
         seq_stat_dims: Optional["dict[str, int]"] = None,
         seq_stat_injection: str = 'add',
+        query_pooling_mode: str = 'mean',
+        query_recent_k: int = 32,
     ) -> None:
         super().__init__()
         if seq_stat_injection not in ('add', 'token'):
@@ -1250,6 +1278,8 @@ class PCVRHyFormer(nn.Module):
             for domain in self.seq_domains
         }
         self.seq_stat_injection = seq_stat_injection
+        self.query_pooling_mode = query_pooling_mode
+        self.query_recent_k = query_recent_k
         self.rank_mixer_mode = rank_mixer_mode
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
@@ -1405,6 +1435,8 @@ class PCVRHyFormer(nn.Module):
             num_queries=num_queries,
             num_sequences=self.num_sequences,
             hidden_mult=hidden_mult,
+            pooling_mode=query_pooling_mode,
+            recent_k=query_recent_k,
         )
 
         # MultiSeqHyFormerBlock stack

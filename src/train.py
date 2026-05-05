@@ -109,6 +109,14 @@ def parse_args() -> argparse.Namespace:
                         help='Per-Embedding-table dimension (before projection)')
     parser.add_argument('--num_queries', type=int, default=1,
                         help='Number of Query tokens generated independently per sequence domain')
+    parser.add_argument('--query_pooling_mode', type=str, default='mean',
+                        choices=['mean', 'mean_recent'],
+                        help='Sequence summaries used by the query generator: '
+                             'mean uses all valid tokens; mean_recent also '
+                             'concatenates a recent-window mean summary.')
+    parser.add_argument('--query_recent_k', type=int, default=32,
+                        help='Number of latest valid sequence tokens used by '
+                             '--query_pooling_mode mean_recent')
     parser.add_argument('--num_hyformer_blocks', type=int, default=2,
                         help='Number of stacked MultiSeqHyFormerBlock layers')
     parser.add_argument('--num_heads', type=int, default=4,
@@ -312,6 +320,8 @@ def main() -> None:
         "d_model": args.d_model,
         "emb_dim": args.emb_dim,
         "num_queries": args.num_queries,
+        "query_pooling_mode": args.query_pooling_mode,
+        "query_recent_k": args.query_recent_k,
         "num_hyformer_blocks": args.num_hyformer_blocks,
         "num_heads": args.num_heads,
         "seq_encoder_type": args.seq_encoder_type,
