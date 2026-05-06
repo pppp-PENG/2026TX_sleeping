@@ -215,12 +215,13 @@ def parse_args() -> argparse.Namespace:
         "--seq_encoder_type",
         type=str,
         default="transformer",
-        choices=["swiglu", "transformer", "longer"],
+        choices=["swiglu", "transformer", "longer", "HSTU"],
         help="Sequence encoder variant: "
         "swiglu = SwiGLU without attention, "
         "transformer = standard self-attention, "
         "longer = Top-K compressed encoder "
-        "(only this variant consumes --seq_top_k / --seq_causal)",
+        "(only this variant consumes --seq_top_k / --seq_causal), "
+        "HSTU = gated pointwise-attention encoder",
     )
     parser.add_argument(
         "--hidden_mult",

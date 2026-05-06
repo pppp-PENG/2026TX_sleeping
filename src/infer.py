@@ -54,7 +54,7 @@ _FALLBACK_MODEL_CFG = {
     "query_recent_k": 32,
     "num_hyformer_blocks": 2,
     "num_heads": 4,
-    "seq_encoder_type": "transformer",
+    "seq_encoder_type": "HSTU",
     "hidden_mult": 4,
     "dropout_rate": 0.01,
     "seq_top_k": 50,
