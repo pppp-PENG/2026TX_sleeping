@@ -942,7 +942,7 @@ def get_pcvr_data(
     logging.info(f"Parquet train: {train_rows} rows, valid: {valid_rows} rows, "
                  f"batch_size={batch_size}, buffer_batches={buffer_batches}")
     
-    # get the number of positive (label == 1) samples (3618)
+    # get the number of positive (label == 1) samples (3618/100w)
     # num_positive_samples = sum(1 for batch in train_loader if batch['label'].eq(1).any())
     # logging.info(f"Number of positive samples in training set: {num_positive_samples}")
 
