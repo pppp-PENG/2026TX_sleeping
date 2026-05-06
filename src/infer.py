@@ -50,7 +50,7 @@ _FALLBACK_MODEL_CFG = {
     "d_model": 64,
     "emb_dim": 64,
     "num_queries": 1,
-    "query_pooling_mode": "mean",
+    "query_pooling_mode": "attn",
     "query_recent_k": 32,
     "num_hyformer_blocks": 2,
     "num_heads": 4,

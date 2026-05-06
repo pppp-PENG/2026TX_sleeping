@@ -431,11 +431,12 @@ class MultiSeqQueryGenerator(nn.Module):
         hidden_mult: int = 4,
         pooling_mode: str = 'mean',
         recent_k: int = 32,
+        attn_heads: int = 4,
     ) -> None:
         super().__init__()
-        if pooling_mode not in ('mean', 'mean_recent'):
+        if pooling_mode not in ('mean', 'mean_recent', 'attn'):
             raise ValueError(
-                f"pooling_mode must be one of mean/mean_recent, got {pooling_mode!r}")
+                f"pooling_mode must be one of mean/mean_recent/attn, got {pooling_mode!r}")
         self.num_queries = num_queries
         self.num_sequences = num_sequences
         self.d_model = d_model
@@ -447,6 +448,23 @@ class MultiSeqQueryGenerator(nn.Module):
 
         # LayerNorm on global_info to prevent gradient explosion from large-dim concat
         self.global_info_norm = nn.LayerNorm(global_info_dim)
+
+        if pooling_mode == 'attn':
+            self.attn_pool_queries = nn.Parameter(
+                torch.empty(num_sequences, 1, d_model))
+            nn.init.xavier_normal_(self.attn_pool_queries)
+            self.attn_poolers = nn.ModuleList([
+                nn.MultiheadAttention(
+                    embed_dim=d_model,
+                    num_heads=attn_heads,
+                    dropout=0.0,
+                    batch_first=True,
+                )
+                for _ in range(num_sequences)
+            ])
+            self.attn_pool_norms = nn.ModuleList([
+                nn.LayerNorm(d_model) for _ in range(num_sequences)
+            ])
 
         # Each sequence has N independent FFNs
         self.query_ffns_per_seq = nn.ModuleList([
@@ -490,6 +508,27 @@ class MultiSeqQueryGenerator(nn.Module):
             seq_sum = (seq_tokens_list[i] * valid_mask_expanded).sum(dim=1)  # (B, D)
             seq_count = valid_mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
             seq_pooled = seq_sum / seq_count  # (B, D)
+
+            if self.pooling_mode == 'attn':
+                safe_padding_mask = seq_padding_masks[i].clone()
+                all_padding = safe_padding_mask.all(dim=1)
+                if all_padding.any():
+                    safe_padding_mask[all_padding, 0] = False
+                pool_query = self.attn_pool_queries[i].unsqueeze(0).expand(B, -1, -1)
+                attn_pooled, _ = self.attn_poolers[i](
+                    query=pool_query,
+                    key=seq_tokens_list[i],
+                    value=seq_tokens_list[i],
+                    key_padding_mask=safe_padding_mask,
+                    need_weights=False,
+                )
+                seq_pooled = self.attn_pool_norms[i](attn_pooled.squeeze(1))
+                if all_padding.any():
+                    seq_pooled = torch.where(
+                        all_padding.unsqueeze(1),
+                        torch.zeros_like(seq_pooled),
+                        seq_pooled,
+                    )
 
             seq_summary_parts = [seq_pooled]
             if self.pooling_mode == 'mean_recent':
@@ -1437,6 +1476,7 @@ class PCVRHyFormer(nn.Module):
             hidden_mult=hidden_mult,
             pooling_mode=query_pooling_mode,
             recent_k=query_recent_k,
+            attn_heads=num_heads,
         )
 
         # MultiSeqHyFormerBlock stack
