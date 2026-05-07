@@ -162,6 +162,14 @@ def parse_args() -> argparse.Namespace:
         "add broadcasts the projected stats to every behavior "
         "token; token prepends one learned stat token per domain.",
     )
+    parser.add_argument(
+        "--target_aware_mode",
+        type=str,
+        default="none",
+        choices=["none", "attn"],
+        help="Target-aware sequence activation mode. attn uses item tokens "
+        "as query to attend over each behavior sequence domain.",
+    )
 
     # Model hyperparameters.
     parser.add_argument(
@@ -556,6 +564,7 @@ def main() -> None:
         "user_ns_tokens": args.user_ns_tokens,
         "item_ns_tokens": args.item_ns_tokens,
         "seq_stat_injection": args.seq_stat_injection,
+        "target_aware_mode": args.target_aware_mode,
     }
 
     model = PCVRHyFormer(**model_args).to(args.device)

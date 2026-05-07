@@ -54,7 +54,7 @@ _FALLBACK_MODEL_CFG = {
     "query_recent_k": 32,
     "num_hyformer_blocks": 2,
     "num_heads": 4,
-    "seq_encoder_type": "HSTU",
+    "seq_encoder_type": "transformer",
     "hidden_mult": 4,
     "dropout_rate": 0.01,
     "seq_top_k": 50,
@@ -70,6 +70,7 @@ _FALLBACK_MODEL_CFG = {
     "user_ns_tokens": 0,
     "item_ns_tokens": 0,
     "seq_stat_injection": "add",
+    "target_aware_mode": "attn",
 }
 
 _FALLBACK_SEQ_MAX_LENS = "seq_a:256,seq_b:256,seq_c:512,seq_d:512"

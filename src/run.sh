@@ -18,7 +18,7 @@ python3 -u "${SCRIPT_DIR}/train.py" \
     --seq_item_cross_mode none \
     --seq_stat_injection add \
     --query_pooling_mode attn \
-    --seq_encoder_type HSTU \
+    --target_aware_mode attn \
     "$@"
 
 # ---- Alternative config: GroupNSTokenizer driven by ns_groups.json ----

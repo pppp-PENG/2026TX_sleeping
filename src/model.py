@@ -1413,11 +1413,16 @@ class PCVRHyFormer(nn.Module):
         seq_stat_injection: str = "add",
         query_pooling_mode: str = "mean",
         query_recent_k: int = 32,
+        target_aware_mode: str = "none",
     ) -> None:
         super().__init__()
         if seq_stat_injection not in ("add", "token"):
             raise ValueError(
                 f"seq_stat_injection must be one of add/token, got {seq_stat_injection!r}"
+            )
+        if target_aware_mode not in ("none", "attn"):
+            raise ValueError(
+                f"target_aware_mode must be one of none/attn, got {target_aware_mode!r}"
             )
 
         self.d_model = d_model
@@ -1434,6 +1439,7 @@ class PCVRHyFormer(nn.Module):
         self.seq_stat_injection = seq_stat_injection
         self.query_pooling_mode = query_pooling_mode
         self.query_recent_k = query_recent_k
+        self.target_aware_mode = target_aware_mode
         self.rank_mixer_mode = rank_mixer_mode
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
@@ -1641,6 +1647,23 @@ class PCVRHyFormer(nn.Module):
             nn.Linear(num_queries * self.num_sequences * d_model, d_model),
             nn.LayerNorm(d_model),
         )
+
+        if target_aware_mode == "attn":
+            self.target_aware_attns = nn.ModuleList(
+                [
+                    nn.MultiheadAttention(
+                        embed_dim=d_model,
+                        num_heads=num_heads,
+                        dropout=dropout_rate,
+                        batch_first=True,
+                    )
+                    for _ in self.seq_domains
+                ]
+            )
+            self.target_aware_proj = nn.Sequential(
+                nn.Linear(self.num_sequences * d_model, d_model),
+                nn.LayerNorm(d_model),
+            )
 
         # Dropout
         self.emb_dropout = nn.Dropout(dropout_rate)
@@ -1887,6 +1910,41 @@ class PCVRHyFormer(nn.Module):
 
         return output
 
+    def _target_aware_interest(
+        self,
+        item_ns: torch.Tensor,
+        seq_tokens_list: list,
+        seq_masks_list: list,
+    ) -> Optional[torch.Tensor]:
+        """Use target item tokens as query to softly activate history domains."""
+        if self.target_aware_mode == "none":
+            return None
+
+        target_query = item_ns.mean(dim=1, keepdim=True)  # (B, 1, D)
+        interests = []
+        for i, (tokens, mask) in enumerate(zip(seq_tokens_list, seq_masks_list)):
+            safe_mask = mask.clone()
+            all_padding = safe_mask.all(dim=1)
+            if all_padding.any():
+                safe_mask[all_padding, 0] = False
+            interest, _ = self.target_aware_attns[i](
+                query=target_query,
+                key=tokens,
+                value=tokens,
+                key_padding_mask=safe_mask,
+                need_weights=False,
+            )
+            interest = interest.squeeze(1)
+            if all_padding.any():
+                interest = torch.where(
+                    all_padding.unsqueeze(1),
+                    torch.zeros_like(interest),
+                    interest,
+                )
+            interests.append(interest)
+
+        return self.target_aware_proj(torch.cat(interests, dim=-1))
+
     def forward(self, inputs: ModelInput) -> torch.Tensor:
         """Runs the forward pass of the PCVRHyFormer model."""
         # 1. NS tokens: grouped projection
@@ -1935,6 +1993,9 @@ class PCVRHyFormer(nn.Module):
             seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
+        target_interest = self._target_aware_interest(
+            item_ns, seq_tokens_list, seq_masks_list)
+
         # 3. Generate independent Q tokens per sequence via MultiSeqQueryGenerator
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
 
@@ -1946,6 +2007,8 @@ class PCVRHyFormer(nn.Module):
             seq_masks_list,
             apply_dropout=self.training,
         )
+        if target_interest is not None:
+            output = output + target_interest
 
         # 5. Classifier
         logits = self.clsfier(output)  # (B, action_num)
@@ -1990,6 +2053,9 @@ class PCVRHyFormer(nn.Module):
             seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
+        target_interest = self._target_aware_interest(
+            item_ns, seq_tokens_list, seq_masks_list)
+
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
 
         output = self._run_multi_seq_blocks(
@@ -1999,6 +2065,8 @@ class PCVRHyFormer(nn.Module):
             seq_masks_list,
             apply_dropout=False,
         )
+        if target_interest is not None:
+            output = output + target_interest
 
         logits = self.clsfier(output)
         return logits, output

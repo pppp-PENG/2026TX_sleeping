@@ -143,6 +143,26 @@ class PCVRHyFormerRankingTrainer:
                      f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
                      f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}")
 
+    def _write_valid_metrics(
+        self,
+        val_auc: float,
+        val_logloss: float,
+        tp: int,
+        fp: int,
+        tn: int,
+        fn: int,
+        total_step: int,
+    ) -> None:
+        """Write validation metrics to TensorBoard."""
+        if not self.writer:
+            return
+        self.writer.add_scalar('AUC/valid', val_auc, total_step)
+        self.writer.add_scalar('LogLoss/valid', val_logloss, total_step)
+        self.writer.add_scalar('TP/valid', tp, total_step)
+        self.writer.add_scalar('FP/valid', fp, total_step)
+        self.writer.add_scalar('TN/valid', tn, total_step)
+        self.writer.add_scalar('FN/valid', fn, total_step)
+
     def _build_step_dir_name(self, global_step: int, is_best: bool = False) -> str:
         """Build a checkpoint sub-directory name such as
         ``global_step2500.layer=2.head=4.hidden=64[.best_model]``.
@@ -349,15 +369,17 @@ class PCVRHyFormerRankingTrainer:
                 # Step-level validation (only when eval_every_n_steps > 0).
                 if self.eval_every_n_steps > 0 and total_step % self.eval_every_n_steps == 0:
                     logging.info(f"Evaluating at step {total_step}")
-                    val_auc, val_logloss = self.evaluate(epoch=epoch)
+                    val_auc, val_logloss, tp, fp, tn, fn = self.evaluate(epoch=epoch)
                     self.model.train()
                     torch.cuda.empty_cache()
 
-                    logging.info(f"Step {total_step} Validation | AUC: {val_auc}, LogLoss: {val_logloss}")
+                    logging.info(
+                        f"Step {total_step} Validation | AUC: {val_auc}, "
+                        f"LogLoss: {val_logloss}, TP: {tp}, FP: {fp}, "
+                        f"TN: {tn}, FN: {fn}")
 
-                    if self.writer:
-                        self.writer.add_scalar('AUC/valid', val_auc, total_step)
-                        self.writer.add_scalar('LogLoss/valid', val_logloss, total_step)
+                    self._write_valid_metrics(
+                        val_auc, val_logloss, tp, fp, tn, fn, total_step)
 
                     self._handle_validation_result(total_step, val_auc, val_logloss)
 
@@ -367,15 +389,16 @@ class PCVRHyFormerRankingTrainer:
 
             logging.info(f"Epoch {epoch}, Average Loss: {loss_sum / len(self.train_loader)}")
 
-            val_auc, val_logloss = self.evaluate(epoch=epoch)
+            val_auc, val_logloss, tp, fp, tn, fn = self.evaluate(epoch=epoch)
             self.model.train()
             torch.cuda.empty_cache()
 
-            logging.info(f"Epoch {epoch} Validation | AUC: {val_auc}, LogLoss: {val_logloss}")
+            logging.info(
+                f"Epoch {epoch} Validation | AUC: {val_auc}, "
+                f"LogLoss: {val_logloss}, TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
 
-            if self.writer:
-                self.writer.add_scalar('AUC/valid', val_auc, total_step)
-                self.writer.add_scalar('LogLoss/valid', val_logloss, total_step)
+            self._write_valid_metrics(
+                val_auc, val_logloss, tp, fp, tn, fn, total_step)
 
             self._handle_validation_result(total_step, val_auc, val_logloss)
 
@@ -505,8 +528,8 @@ class PCVRHyFormerRankingTrainer:
 
         return loss.item(), total_norm
 
-    def evaluate(self, epoch: Optional[int] = None) -> Tuple[float, float]:
-        """Run validation over ``self.valid_loader`` and return ``(AUC, logloss)``.
+    def evaluate(self, epoch: Optional[int] = None) -> Tuple[float, float, int, int, int, int]:
+        """Run validation and return ``(AUC, logloss, TP, FP, TN, FN)``.
 
         NaN predictions (which can arise from exploding gradients) are filtered
         out before computing both metrics.
@@ -548,6 +571,16 @@ class PCVRHyFormerRankingTrainer:
         else:
             auc = float(roc_auc_score(labels_np, probs))
 
+        if len(probs) == 0:
+            tp = fp = tn = fn = 0
+        else:
+            pred_np = (probs >= 0.5).astype(np.int64)
+            label_bin = labels_np.astype(np.int64)
+            tp = int(np.sum((pred_np == 1) & (label_bin == 1)))
+            fp = int(np.sum((pred_np == 1) & (label_bin == 0)))
+            tn = int(np.sum((pred_np == 0) & (label_bin == 0)))
+            fn = int(np.sum((pred_np == 0) & (label_bin == 1)))
+
         # Binary logloss (same NaN filtering).
         valid_logits = all_logits[~torch.isnan(all_logits)]
         valid_labels = all_labels[~torch.isnan(all_logits)]
@@ -556,7 +589,7 @@ class PCVRHyFormerRankingTrainer:
         else:
             logloss = float('inf')
 
-        return auc, logloss
+        return auc, logloss, tp, fp, tn, fn
 
     def _evaluate_step(
         self, batch: Dict[str, Any]
