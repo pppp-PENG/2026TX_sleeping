@@ -80,14 +80,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num_epochs",
         type=int,
-        default=999,
+        default=5,
         help="Maximum number of training epochs "
         "(typically terminated earlier by early stopping)",
     )
     parser.add_argument(
         "--patience",
         type=int,
-        default=1,
+        default=5,
         help="Early-stopping patience " "(number of validations without improvement)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -162,14 +162,6 @@ def parse_args() -> argparse.Namespace:
         "add broadcasts the projected stats to every behavior "
         "token; token prepends one learned stat token per domain.",
     )
-    parser.add_argument(
-        "--target_aware_mode",
-        type=str,
-        default="none",
-        choices=["none", "attn"],
-        help="Target-aware sequence activation mode. attn uses item tokens "
-        "as query to attend over each behavior sequence domain.",
-    )
 
     # Model hyperparameters.
     parser.add_argument(
@@ -223,13 +215,12 @@ def parse_args() -> argparse.Namespace:
         "--seq_encoder_type",
         type=str,
         default="transformer",
-        choices=["swiglu", "transformer", "longer", "HSTU"],
+        choices=["swiglu", "transformer", "longer"],
         help="Sequence encoder variant: "
         "swiglu = SwiGLU without attention, "
         "transformer = standard self-attention, "
         "longer = Top-K compressed encoder "
-        "(only this variant consumes --seq_top_k / --seq_causal), "
-        "HSTU = gated pointwise-attention encoder",
+        "(only this variant consumes --seq_top_k / --seq_causal)",
     )
     parser.add_argument(
         "--hidden_mult",
@@ -564,7 +555,6 @@ def main() -> None:
         "user_ns_tokens": args.user_ns_tokens,
         "item_ns_tokens": args.item_ns_tokens,
         "seq_stat_injection": args.seq_stat_injection,
-        "target_aware_mode": args.target_aware_mode,
     }
 
     model = PCVRHyFormer(**model_args).to(args.device)

@@ -884,87 +884,6 @@ class LongerEncoder(nn.Module):
         return out, new_mask
 
 
-class HSTUEncoder(nn.Module):
-    """HSTU-style sequence encoder.
-
-    This follows the core HSTU block from "Actions Speak Louder than Words":
-    a fused pointwise projection produces U/V/Q/K, pointwise SiLU attention
-    pools V, LayerNorm stabilizes the pooled values, and U gates the result
-    before an output projection. The production paper also uses specialized
-    jagged kernels and relative position/time bias; this baseline keeps the
-    interface compatible with the other encoders and relies on existing time
-    bucket embeddings / optional RoPE for temporal signals.
-    """
-
-    def __init__(
-        self, d_model: int, num_heads: int, hidden_mult: int = 4, dropout: float = 0.0
-    ) -> None:
-        super().__init__()
-        if d_model % num_heads != 0:
-            raise ValueError("d_model must be divisible by num_heads")
-
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.head_dim = d_model // num_heads
-        self.input_norm = nn.LayerNorm(d_model)
-        self.uvqk = nn.Linear(d_model, 4 * d_model)
-        self.pooled_norm = nn.LayerNorm(d_model)
-        self.output_proj = nn.Linear(d_model, d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        key_padding_mask: Optional[torch.Tensor] = None,
-        rope_cos: Optional[torch.Tensor] = None,
-        rope_sin: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        B, L, _ = x.shape
-        residual = x
-        x_normed = self.input_norm(x)
-
-        U, V, Q, K = F.silu(self.uvqk(x_normed)).chunk(4, dim=-1)
-
-        def _split_heads(t: torch.Tensor) -> torch.Tensor:
-            return t.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
-
-        U_h = _split_heads(U)
-        V_h = _split_heads(V)
-        Q_h = _split_heads(Q)
-        K_h = _split_heads(K)
-
-        if rope_cos is not None and rope_sin is not None:
-            Q_h = apply_rope_to_tensor(Q_h, rope_cos, rope_sin)
-            K_h = apply_rope_to_tensor(K_h, rope_cos, rope_sin)
-
-        scores = torch.matmul(Q_h, K_h.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        attn = F.silu(scores)
-        if key_padding_mask is not None:
-            key_valid = (~key_padding_mask).unsqueeze(1).unsqueeze(2)
-            attn = attn * key_valid.to(attn.dtype)
-
-        # Pointwise aggregated attention keeps count/intensity information that
-        # softmax would normalize away. Divide by sqrt(valid count) for scale
-        # stability while still preserving activity magnitude.
-        if key_padding_mask is not None:
-            valid_count = (~key_padding_mask).sum(dim=1).clamp(min=1).to(attn.dtype)
-            attn = attn / valid_count.sqrt().view(B, 1, 1, 1)
-        else:
-            attn = attn / math.sqrt(max(L, 1))
-
-        pooled = torch.matmul(attn, V_h)  # (B, H, L, D_h)
-        pooled = pooled.transpose(1, 2).contiguous().view(B, L, self.d_model)
-        U_flat = U_h.transpose(1, 2).contiguous().view(B, L, self.d_model)
-
-        out = self.pooled_norm(pooled) * U_flat
-        out = self.output_proj(out)
-        out = self.dropout(out)
-        out = residual + out
-        if key_padding_mask is not None:
-            out = out.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
-        return out, key_padding_mask
-
-
 def create_sequence_encoder(
     encoder_type: str,
     d_model: int,
@@ -995,8 +914,6 @@ def create_sequence_encoder(
         return TransformerEncoder(d_model, num_heads, hidden_mult, dropout)
     elif encoder_type == "longer":
         return LongerEncoder(d_model, num_heads, top_k, hidden_mult, dropout, causal)
-    elif encoder_type == "HSTU":
-        return HSTUEncoder(d_model, num_heads, hidden_mult, dropout)
     else:
         raise ValueError(f"Unknown encoder type: {encoder_type}")
 
@@ -1413,16 +1330,11 @@ class PCVRHyFormer(nn.Module):
         seq_stat_injection: str = "add",
         query_pooling_mode: str = "mean",
         query_recent_k: int = 32,
-        target_aware_mode: str = "none",
     ) -> None:
         super().__init__()
         if seq_stat_injection not in ("add", "token"):
             raise ValueError(
                 f"seq_stat_injection must be one of add/token, got {seq_stat_injection!r}"
-            )
-        if target_aware_mode not in ("none", "attn"):
-            raise ValueError(
-                f"target_aware_mode must be one of none/attn, got {target_aware_mode!r}"
             )
 
         self.d_model = d_model
@@ -1439,7 +1351,6 @@ class PCVRHyFormer(nn.Module):
         self.seq_stat_injection = seq_stat_injection
         self.query_pooling_mode = query_pooling_mode
         self.query_recent_k = query_recent_k
-        self.target_aware_mode = target_aware_mode
         self.rank_mixer_mode = rank_mixer_mode
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
@@ -1647,23 +1558,6 @@ class PCVRHyFormer(nn.Module):
             nn.Linear(num_queries * self.num_sequences * d_model, d_model),
             nn.LayerNorm(d_model),
         )
-
-        if target_aware_mode == "attn":
-            self.target_aware_attns = nn.ModuleList(
-                [
-                    nn.MultiheadAttention(
-                        embed_dim=d_model,
-                        num_heads=num_heads,
-                        dropout=dropout_rate,
-                        batch_first=True,
-                    )
-                    for _ in self.seq_domains
-                ]
-            )
-            self.target_aware_proj = nn.Sequential(
-                nn.Linear(self.num_sequences * d_model, d_model),
-                nn.LayerNorm(d_model),
-            )
 
         # Dropout
         self.emb_dropout = nn.Dropout(dropout_rate)
@@ -1910,41 +1804,6 @@ class PCVRHyFormer(nn.Module):
 
         return output
 
-    def _target_aware_interest(
-        self,
-        item_ns: torch.Tensor,
-        seq_tokens_list: list,
-        seq_masks_list: list,
-    ) -> Optional[torch.Tensor]:
-        """Use target item tokens as query to softly activate history domains."""
-        if self.target_aware_mode == "none":
-            return None
-
-        target_query = item_ns.mean(dim=1, keepdim=True)  # (B, 1, D)
-        interests = []
-        for i, (tokens, mask) in enumerate(zip(seq_tokens_list, seq_masks_list)):
-            safe_mask = mask.clone()
-            all_padding = safe_mask.all(dim=1)
-            if all_padding.any():
-                safe_mask[all_padding, 0] = False
-            interest, _ = self.target_aware_attns[i](
-                query=target_query,
-                key=tokens,
-                value=tokens,
-                key_padding_mask=safe_mask,
-                need_weights=False,
-            )
-            interest = interest.squeeze(1)
-            if all_padding.any():
-                interest = torch.where(
-                    all_padding.unsqueeze(1),
-                    torch.zeros_like(interest),
-                    interest,
-                )
-            interests.append(interest)
-
-        return self.target_aware_proj(torch.cat(interests, dim=-1))
-
     def forward(self, inputs: ModelInput) -> torch.Tensor:
         """Runs the forward pass of the PCVRHyFormer model."""
         # 1. NS tokens: grouped projection
@@ -1993,9 +1852,6 @@ class PCVRHyFormer(nn.Module):
             seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
-        target_interest = self._target_aware_interest(
-            item_ns, seq_tokens_list, seq_masks_list)
-
         # 3. Generate independent Q tokens per sequence via MultiSeqQueryGenerator
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
 
@@ -2007,8 +1863,6 @@ class PCVRHyFormer(nn.Module):
             seq_masks_list,
             apply_dropout=self.training,
         )
-        if target_interest is not None:
-            output = output + target_interest
 
         # 5. Classifier
         logits = self.clsfier(output)  # (B, action_num)
@@ -2053,9 +1907,6 @@ class PCVRHyFormer(nn.Module):
             seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
-        target_interest = self._target_aware_interest(
-            item_ns, seq_tokens_list, seq_masks_list)
-
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
 
         output = self._run_multi_seq_blocks(
@@ -2065,8 +1916,6 @@ class PCVRHyFormer(nn.Module):
             seq_masks_list,
             apply_dropout=False,
         )
-        if target_interest is not None:
-            output = output + target_interest
 
         logits = self.clsfier(output)
         return logits, output

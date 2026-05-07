@@ -46,7 +46,7 @@ class PCVRHyFormerRankingTrainer:
         device: str,
         save_dir: str,
         early_stopping: EarlyStopping,
-        loss_type: str = 'bce',
+        loss_type: str = "bce",
         focal_alpha: float = 0.1,
         focal_gamma: float = 2.0,
         sparse_lr: float = 0.05,
@@ -78,13 +78,17 @@ class PCVRHyFormerRankingTrainer:
 
         # Dual optimizer: Adagrad for sparse Embeddings, AdamW for dense params.
         self.sparse_optimizer: Optional[torch.optim.Optimizer]
-        if hasattr(model, 'get_sparse_params'):
+        if hasattr(model, "get_sparse_params"):
             sparse_params = model.get_sparse_params()
             dense_params = model.get_dense_params()
             sparse_param_count = sum(p.numel() for p in sparse_params)
             dense_param_count = sum(p.numel() for p in dense_params)
-            logging.info(f"Sparse params: {len(sparse_params)} tensors, {sparse_param_count:,} parameters (Adagrad lr={sparse_lr})")
-            logging.info(f"Dense params: {len(dense_params)} tensors, {dense_param_count:,} parameters (AdamW lr={lr})")
+            logging.info(
+                f"Sparse params: {len(sparse_params)} tensors, {sparse_param_count:,} parameters (Adagrad lr={sparse_lr})"
+            )
+            logging.info(
+                f"Dense params: {len(dense_params)} tensors, {dense_param_count:,} parameters (AdamW lr={lr})"
+            )
             self.sparse_optimizer = torch.optim.Adagrad(
                 sparse_params, lr=sparse_lr, weight_decay=sparse_weight_decay
             )
@@ -121,14 +125,18 @@ class PCVRHyFormerRankingTrainer:
             def _lr_lambda(current_step: int) -> float:
                 if current_step < warmup_steps:
                     return current_step / warmup_steps
-                progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+                progress = (current_step - warmup_steps) / max(
+                    1, total_steps - warmup_steps
+                )
                 return max(_min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
             self.dense_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = (
                 torch.optim.lr_scheduler.LambdaLR(self.dense_optimizer, _lr_lambda)
             )
-            logging.info(f"LR scheduler: warmup {warmup_steps} steps, "
-                         f"cosine decay to {min_lr_ratio:.0%} of peak, total {total_steps} steps")
+            logging.info(
+                f"LR scheduler: warmup {warmup_steps} steps, "
+                f"cosine decay to {min_lr_ratio:.0%} of peak, total {total_steps} steps"
+            )
         else:
             self.dense_scheduler = None
 
@@ -139,29 +147,11 @@ class PCVRHyFormerRankingTrainer:
         self.use_amp = True
         self.amp_dtype = torch.bfloat16
 
-        logging.info(f"PCVRHyFormerRankingTrainer loss_type={loss_type}, "
-                     f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
-                     f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}")
-
-    def _write_valid_metrics(
-        self,
-        val_auc: float,
-        val_logloss: float,
-        tp: int,
-        fp: int,
-        tn: int,
-        fn: int,
-        total_step: int,
-    ) -> None:
-        """Write validation metrics to TensorBoard."""
-        if not self.writer:
-            return
-        self.writer.add_scalar('AUC/valid', val_auc, total_step)
-        self.writer.add_scalar('LogLoss/valid', val_logloss, total_step)
-        self.writer.add_scalar('TP/valid', tp, total_step)
-        self.writer.add_scalar('FP/valid', fp, total_step)
-        self.writer.add_scalar('TN/valid', tn, total_step)
-        self.writer.add_scalar('FN/valid', fn, total_step)
+        logging.info(
+            f"PCVRHyFormerRankingTrainer loss_type={loss_type}, "
+            f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
+            f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}"
+        )
 
     def _build_step_dir_name(self, global_step: int, is_best: bool = False) -> str:
         """Build a checkpoint sub-directory name such as
@@ -206,6 +196,7 @@ class PCVRHyFormerRankingTrainer:
 
         if self.train_config:
             import json
+
             cfg_to_dump = self.train_config
             if ns_groups_copied:
                 # Override the stored path to a filename relative to ckpt_dir;
@@ -213,9 +204,8 @@ class PCVRHyFormerRankingTrainer:
                 # the recorded path is not absolute, which keeps the ckpt
                 # portable across hosts.
                 cfg_to_dump = dict(self.train_config)
-                cfg_to_dump['ns_groups_json'] = os.path.basename(
-                    self.ns_groups_path)
-            with open(os.path.join(ckpt_dir, 'train_config.json'), 'w') as f:
+                cfg_to_dump["ns_groups_json"] = os.path.basename(self.ns_groups_path)
+            with open(os.path.join(ckpt_dir, "train_config.json"), "w") as f:
                 json.dump(cfg_to_dump, f, indent=2)
 
     def _save_step_checkpoint(
@@ -296,21 +286,24 @@ class PCVRHyFormerRankingTrainer:
            ``EarlyStopping``'s own gate does not create a stray dir.
         """
         if torch.cuda.is_available():
-            peak_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            peak_mb = torch.cuda.max_memory_allocated() / (1024**2)
             logging.info(f"Validation telemetry | peak_cuda_mem_mb: {peak_mb:.1f}")
 
         old_best = self.early_stopping.best_score
         is_likely_new_best = (
-            old_best is None
-            or val_auc > old_best + self.early_stopping.delta
+            old_best is None or val_auc > old_best + self.early_stopping.delta
         )
         if not is_likely_new_best:
             # No new best anticipated: leave disk untouched. The previous
             # best_model dir (with its model.pt + sidecars) remains valid.
-            self.early_stopping(val_auc, self.model, {
-                "best_val_AUC": val_auc,
-                "best_val_logloss": val_logloss,
-            })
+            self.early_stopping(
+                val_auc,
+                self.model,
+                {
+                    "best_val_AUC": val_auc,
+                    "best_val_logloss": val_logloss,
+                },
+            )
             return
 
         # Point EarlyStopping at the canonical best-model location for this
@@ -326,10 +319,14 @@ class PCVRHyFormerRankingTrainer:
         # I/O needed when a new best is confirmed.
         self._remove_old_best_dirs()
 
-        self.early_stopping(val_auc, self.model, {
-            "best_val_AUC": val_auc,
-            "best_val_logloss": val_logloss,
-        })
+        self.early_stopping(
+            val_auc,
+            self.model,
+            {
+                "best_val_AUC": val_auc,
+                "best_val_logloss": val_logloss,
+            },
+        )
 
         # Write sidecar files only when EarlyStopping actually confirmed a
         # new best and wrote model.pt. If the score tripped our heuristic
@@ -338,8 +335,7 @@ class PCVRHyFormerRankingTrainer:
         if self.early_stopping.best_score != old_best and os.path.exists(
             self.early_stopping.checkpoint_path
         ):
-            self._save_step_checkpoint(
-                total_step, is_best=True, skip_model_file=True)
+            self._save_step_checkpoint(total_step, is_best=True, skip_model_file=True)
 
     def train(self) -> None:
         """Main training loop: iterates over epochs, performs step-level and
@@ -351,8 +347,11 @@ class PCVRHyFormerRankingTrainer:
         total_step = 0
 
         for epoch in range(1, self.num_epochs + 1):
-            train_pbar = tqdm(enumerate(self.train_loader), total=len(self.train_loader),
-                              dynamic_ncols=True)
+            train_pbar = tqdm(
+                enumerate(self.train_loader),
+                total=len(self.train_loader),
+                dynamic_ncols=True,
+            )
             loss_sum = 0.0
 
             for step, batch in train_pbar:
@@ -361,25 +360,30 @@ class PCVRHyFormerRankingTrainer:
                 loss_sum += loss
 
                 if self.writer:
-                    self.writer.add_scalar('Loss/train', loss, total_step)
-                    self.writer.add_scalar('GradientNorm/train', total_norm, total_step)
+                    self.writer.add_scalar("Loss/train", loss, total_step)
+                    self.writer.add_scalar("GradientNorm/train", total_norm, total_step)
 
-                train_pbar.set_postfix({"loss": f"{loss:.4f}", "grad_norm": f"{total_norm:.4f}"})
+                train_pbar.set_postfix(
+                    {"loss": f"{loss:.4f}", "grad_norm": f"{total_norm:.4f}"}
+                )
 
                 # Step-level validation (only when eval_every_n_steps > 0).
-                if self.eval_every_n_steps > 0 and total_step % self.eval_every_n_steps == 0:
+                if (
+                    self.eval_every_n_steps > 0
+                    and total_step % self.eval_every_n_steps == 0
+                ):
                     logging.info(f"Evaluating at step {total_step}")
-                    val_auc, val_logloss, tp, fp, tn, fn = self.evaluate(epoch=epoch)
+                    val_auc, val_logloss = self.evaluate(epoch=epoch)
                     self.model.train()
                     torch.cuda.empty_cache()
 
                     logging.info(
-                        f"Step {total_step} Validation | AUC: {val_auc}, "
-                        f"LogLoss: {val_logloss}, TP: {tp}, FP: {fp}, "
-                        f"TN: {tn}, FN: {fn}")
+                        f"Step {total_step} Validation | AUC: {val_auc}, LogLoss: {val_logloss}"
+                    )
 
-                    self._write_valid_metrics(
-                        val_auc, val_logloss, tp, fp, tn, fn, total_step)
+                    if self.writer:
+                        self.writer.add_scalar("AUC/valid", val_auc, total_step)
+                        self.writer.add_scalar("LogLoss/valid", val_logloss, total_step)
 
                     self._handle_validation_result(total_step, val_auc, val_logloss)
 
@@ -387,18 +391,21 @@ class PCVRHyFormerRankingTrainer:
                         logging.info(f"Early stopping at step {total_step}")
                         return
 
-            logging.info(f"Epoch {epoch}, Average Loss: {loss_sum / len(self.train_loader)}")
+            logging.info(
+                f"Epoch {epoch}, Average Loss: {loss_sum / len(self.train_loader)}"
+            )
 
-            val_auc, val_logloss, tp, fp, tn, fn = self.evaluate(epoch=epoch)
+            val_auc, val_logloss = self.evaluate(epoch=epoch)
             self.model.train()
             torch.cuda.empty_cache()
 
             logging.info(
-                f"Epoch {epoch} Validation | AUC: {val_auc}, "
-                f"LogLoss: {val_logloss}, TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
+                f"Epoch {epoch} Validation | AUC: {val_auc}, LogLoss: {val_logloss}"
+            )
 
-            self._write_valid_metrics(
-                val_auc, val_logloss, tp, fp, tn, fn, total_step)
+            if self.writer:
+                self.writer.add_scalar("AUC/valid", val_auc, total_step)
+                self.writer.add_scalar("LogLoss/valid", val_logloss, total_step)
 
             self._handle_validation_result(total_step, val_auc, val_logloss)
 
@@ -411,19 +418,26 @@ class PCVRHyFormerRankingTrainer:
             # Reference: KuaiShou Tech., "MultiEpoch: Reusing Training Data
             # for Click-Through Rate Prediction",
             # https://arxiv.org/pdf/2305.19531
-            if epoch >= self.reinit_sparse_after_epoch and self.sparse_optimizer is not None:
+            if (
+                epoch >= self.reinit_sparse_after_epoch
+                and self.sparse_optimizer is not None
+            ):
                 # Snapshot Adagrad state per parameter via data_ptr, so state
                 # of low-cardinality embeddings can be preserved across rebuild.
                 old_state: Dict[int, Any] = {}
                 for group in self.sparse_optimizer.param_groups:
-                    for p in group['params']:
+                    for p in group["params"]:
                         if p.data_ptr() in self.sparse_optimizer.state:
                             old_state[p.data_ptr()] = self.sparse_optimizer.state[p]
 
-                reinit_ptrs = self.model.reinit_high_cardinality_params(self.reinit_cardinality_threshold)
+                reinit_ptrs = self.model.reinit_high_cardinality_params(
+                    self.reinit_cardinality_threshold
+                )
                 sparse_params = self.model.get_sparse_params()
                 self.sparse_optimizer = torch.optim.Adagrad(
-                    sparse_params, lr=self.sparse_lr, weight_decay=self.sparse_weight_decay
+                    sparse_params,
+                    lr=self.sparse_lr,
+                    weight_decay=self.sparse_weight_decay,
                 )
                 # Restore optimizer state for low-cardinality embeddings only.
                 restored = 0
@@ -431,31 +445,34 @@ class PCVRHyFormerRankingTrainer:
                     if p.data_ptr() not in reinit_ptrs and p.data_ptr() in old_state:
                         self.sparse_optimizer.state[p] = old_state[p.data_ptr()]
                         restored += 1
-                logging.info(f"Rebuilt Adagrad optimizer after epoch {epoch}, "
-                             f"restored optimizer state for {restored} low-cardinality params")
+                logging.info(
+                    f"Rebuilt Adagrad optimizer after epoch {epoch}, "
+                    f"restored optimizer state for {restored} low-cardinality params"
+                )
 
     def _make_model_input(self, device_batch: Dict[str, Any]) -> ModelInput:
         """Construct a ``ModelInput`` NamedTuple from a device_batch dict."""
-        seq_domains = device_batch['_seq_domains']
+        seq_domains = device_batch["_seq_domains"]
         seq_data: Dict[str, torch.Tensor] = {}
         seq_lens: Dict[str, torch.Tensor] = {}
         seq_time_buckets: Dict[str, torch.Tensor] = {}
         seq_stats: Dict[str, torch.Tensor] = {}
         for domain in seq_domains:
             seq_data[domain] = device_batch[domain]
-            seq_lens[domain] = device_batch[f'{domain}_len']
+            seq_lens[domain] = device_batch[f"{domain}_len"]
             B = device_batch[domain].shape[0]
             L = device_batch[domain].shape[2]
             seq_time_buckets[domain] = device_batch.get(
-                f'{domain}_time_bucket',
-                torch.zeros(B, L, dtype=torch.long, device=self.device))
-            if f'{domain}_stat' in device_batch:
-                seq_stats[domain] = device_batch[f'{domain}_stat']
+                f"{domain}_time_bucket",
+                torch.zeros(B, L, dtype=torch.long, device=self.device),
+            )
+            if f"{domain}_stat" in device_batch:
+                seq_stats[domain] = device_batch[f"{domain}_stat"]
         return ModelInput(
-            user_int_feats=device_batch['user_int_feats'],
-            item_int_feats=device_batch['item_int_feats'],
-            user_dense_feats=device_batch['user_dense_feats'],
-            item_dense_feats=device_batch['item_dense_feats'],
+            user_int_feats=device_batch["user_int_feats"],
+            item_int_feats=device_batch["item_int_feats"],
+            user_dense_feats=device_batch["user_dense_feats"],
+            item_dense_feats=device_batch["item_dense_feats"],
             seq_data=seq_data,
             seq_lens=seq_lens,
             seq_time_buckets=seq_time_buckets,
@@ -465,20 +482,22 @@ class PCVRHyFormerRankingTrainer:
     def _train_step(self, batch: Dict[str, Any]) -> float:
         """Run a single training step and return the scalar loss value."""
         device_batch = self._batch_to_device(batch)
-        label = device_batch['label'].float()
+        label = device_batch["label"].float()
 
         self.dense_optimizer.zero_grad()
         if self.sparse_optimizer is not None:
             self.sparse_optimizer.zero_grad()
 
         if self.mixed_precision:
-            with torch.amp.autocast('cuda', dtype=self.amp_dtype, enabled=self.use_amp):
+            with torch.amp.autocast("cuda", dtype=self.amp_dtype, enabled=self.use_amp):
                 model_input = self._make_model_input(device_batch)
                 logits = self.model(model_input)  # (B, 1)
                 logits = logits.squeeze(-1)  # (B,)
 
-                if self.loss_type == 'focal':
-                    loss = sigmoid_focal_loss(logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma)
+                if self.loss_type == "focal":
+                    loss = sigmoid_focal_loss(
+                        logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma
+                    )
                 else:
                     loss = F.binary_cross_entropy_with_logits(logits, label)
 
@@ -492,8 +511,10 @@ class PCVRHyFormerRankingTrainer:
             logits = self.model(model_input)  # (B, 1)
             logits = logits.squeeze(-1)  # (B,)
 
-            if self.loss_type == 'focal':
-                loss = sigmoid_focal_loss(logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma)
+            if self.loss_type == "focal":
+                loss = sigmoid_focal_loss(
+                    logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma
+                )
             else:
                 loss = F.binary_cross_entropy_with_logits(logits, label)
 
@@ -508,7 +529,9 @@ class PCVRHyFormerRankingTrainer:
 
         # foreach=False: avoids a PyTorch _foreach_norm CUDA kernel bug observed
         # with certain tensor shapes in this project.
-        total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, foreach=False)
+        total_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=1.0, foreach=False
+        )
 
         # if self.scaler is not None:
         #     self.scaler.step(self.dense_optimizer)
@@ -528,8 +551,8 @@ class PCVRHyFormerRankingTrainer:
 
         return loss.item(), total_norm
 
-    def evaluate(self, epoch: Optional[int] = None) -> Tuple[float, float, int, int, int, int]:
-        """Run validation and return ``(AUC, logloss, TP, FP, TN, FN)``.
+    def evaluate(self, epoch: Optional[int] = None) -> Tuple[float, float]:
+        """Run validation over ``self.valid_loader`` and return ``(AUC, logloss)``.
 
         NaN predictions (which can arise from exploding gradients) are filtered
         out before computing both metrics.
@@ -561,7 +584,9 @@ class PCVRHyFormerRankingTrainer:
         nan_mask = np.isnan(probs)
         if nan_mask.any():
             n_nan = int(nan_mask.sum())
-            logging.warning(f"[Evaluate] {n_nan}/{len(probs)} predictions are NaN, filtering them out")
+            logging.warning(
+                f"[Evaluate] {n_nan}/{len(probs)} predictions are NaN, filtering them out"
+            )
             valid_mask = ~nan_mask
             probs = probs[valid_mask]
             labels_np = labels_np[valid_mask]
@@ -571,32 +596,24 @@ class PCVRHyFormerRankingTrainer:
         else:
             auc = float(roc_auc_score(labels_np, probs))
 
-        if len(probs) == 0:
-            tp = fp = tn = fn = 0
-        else:
-            pred_np = (probs >= 0.5).astype(np.int64)
-            label_bin = labels_np.astype(np.int64)
-            tp = int(np.sum((pred_np == 1) & (label_bin == 1)))
-            fp = int(np.sum((pred_np == 1) & (label_bin == 0)))
-            tn = int(np.sum((pred_np == 0) & (label_bin == 0)))
-            fn = int(np.sum((pred_np == 0) & (label_bin == 1)))
-
         # Binary logloss (same NaN filtering).
         valid_logits = all_logits[~torch.isnan(all_logits)]
         valid_labels = all_labels[~torch.isnan(all_logits)]
         if len(valid_logits) > 0:
-            logloss = F.binary_cross_entropy_with_logits(valid_logits, valid_labels.float()).item()
+            logloss = F.binary_cross_entropy_with_logits(
+                valid_logits, valid_labels.float()
+            ).item()
         else:
-            logloss = float('inf')
+            logloss = float("inf")
 
-        return auc, logloss, tp, fp, tn, fn
+        return auc, logloss
 
     def _evaluate_step(
         self, batch: Dict[str, Any]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Run a single validation step and return ``(logits, labels)``."""
         device_batch = self._batch_to_device(batch)
-        label = device_batch['label']
+        label = device_batch["label"]
 
         model_input = self._make_model_input(device_batch)
         logits, _ = self.model.predict(model_input)  # (B, 1), (B, D)

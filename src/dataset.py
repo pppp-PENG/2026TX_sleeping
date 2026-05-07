@@ -31,6 +31,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 try:
     import numpy.typing as npt  # noqa: F401
 except ImportError:  # pragma: no cover
+
     class _NptFallback:  # type: ignore[no-redef]
         NDArray = Any
 
@@ -81,18 +82,18 @@ class FeatureSchema:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (for JSON dumping)."""
         return {
-            'entries': self.entries,
-            'total_dim': self.total_dim,
+            "entries": self.entries,
+            "total_dim": self.total_dim,
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> 'FeatureSchema':
+    def from_dict(cls, d: Dict[str, Any]) -> "FeatureSchema":
         """Reconstruct a :class:`FeatureSchema` from its dict form."""
         schema = cls()
-        for fid, offset, length in d['entries']:
+        for fid, offset, length in d["entries"]:
             schema.entries.append((fid, offset, length))
             schema._fid_to_entry[fid] = (offset, length)
-        schema.total_dim = d['total_dim']
+        schema.total_dim = d["total_dim"]
         return schema
 
     def __repr__(self) -> str:
@@ -102,23 +103,80 @@ class FeatureSchema:
         lines.append("])")
         return "\n".join(lines)
 
+
 # Use filesystem-based tensor sharing (instead of /dev/shm) to avoid running
 # out of shared memory when many DataLoader workers are active.
-torch.multiprocessing.set_sharing_strategy('file_system')
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 # Time-delta bucket boundaries (64 edges -> 65 buckets: 0=padding, 1..64).
-BUCKET_BOUNDARIES = np.array([
-    5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60,
-    120, 180, 240, 300, 360, 420, 480, 540, 600,
-    900, 1200, 1500, 1800, 2100, 2400, 2700, 3000, 3300, 3600,
-    5400, 7200, 9000, 10800, 12600, 14400, 16200, 18000, 19800, 21600,
-    32400, 43200, 54000, 64800, 75600, 86400,
-    172800, 259200, 345600, 432000, 518400, 604800,
-    1123200, 1641600, 2160000, 2592000,
-    4320000, 6048000, 7776000,
-    11664000, 15552000,
-    31536000,
-], dtype=np.int64)
+BUCKET_BOUNDARIES = np.array(
+    [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50,
+        55,
+        60,
+        120,
+        180,
+        240,
+        300,
+        360,
+        420,
+        480,
+        540,
+        600,
+        900,
+        1200,
+        1500,
+        1800,
+        2100,
+        2400,
+        2700,
+        3000,
+        3300,
+        3600,
+        5400,
+        7200,
+        9000,
+        10800,
+        12600,
+        14400,
+        16200,
+        18000,
+        19800,
+        21600,
+        32400,
+        43200,
+        54000,
+        64800,
+        75600,
+        86400,
+        172800,
+        259200,
+        345600,
+        432000,
+        518400,
+        604800,
+        1123200,
+        1641600,
+        2160000,
+        2592000,
+        4320000,
+        6048000,
+        7776000,
+        11664000,
+        15552000,
+        31536000,
+    ],
+    dtype=np.int64,
+)
 
 # Total number of time-bucket embedding slots (= number of boundaries + 1, with
 # padding=0 included).
@@ -134,15 +192,15 @@ NUM_TIME_BUCKETS = len(BUCKET_BOUNDARIES) + 1
 # Maximum bucket ID (inclusive) for 1h / 1d / 7d time windows.
 # Computed once from BUCKET_BOUNDARIES so the thresholds stay consistent if
 # the boundaries array is ever updated.
-_STAT_BUCKET_1H = int(np.searchsorted(BUCKET_BOUNDARIES, 3600)) + 1    # ≤ 1 hour
-_STAT_BUCKET_1D = int(np.searchsorted(BUCKET_BOUNDARIES, 86400)) + 1   # ≤ 1 day
+_STAT_BUCKET_1H = int(np.searchsorted(BUCKET_BOUNDARIES, 3600)) + 1  # ≤ 1 hour
+_STAT_BUCKET_1D = int(np.searchsorted(BUCKET_BOUNDARIES, 86400)) + 1  # ≤ 1 day
 _STAT_BUCKET_7D = int(np.searchsorted(BUCKET_BOUNDARIES, 604800)) + 1  # ≤ 7 days
 
 _EXT_STAT_WINDOWS = (3600, 21600, 86400, 259200, 604800, 2592000)
-_EXT_STAT_BUCKETS = np.array([
-    int(np.searchsorted(BUCKET_BOUNDARIES, w)) + 1
-    for w in _EXT_STAT_WINDOWS
-], dtype=np.int64)
+_EXT_STAT_BUCKETS = np.array(
+    [int(np.searchsorted(BUCKET_BOUNDARIES, w)) + 1 for w in _EXT_STAT_WINDOWS],
+    dtype=np.int64,
+)
 _EXT_STAT_MAX_AGE = float(BUCKET_BOUNDARIES[-1])
 
 
@@ -167,8 +225,8 @@ class PCVRParquetDataset(IterableDataset):
         row_group_range: Optional[Tuple[int, int]] = None,
         clip_vocab: bool = True,
         is_training: bool = True,
-        seq_stat_mode: str = 'basic',
-        seq_item_cross_mode: str = 'none',
+        seq_stat_mode: str = "basic",
+        seq_item_cross_mode: str = "none",
     ) -> None:
         """
         Args:
@@ -195,19 +253,22 @@ class PCVRParquetDataset(IterableDataset):
                 extended sequence stats.
         """
         super().__init__()
-        if seq_stat_mode not in ('none', 'basic', 'extended'):
+        if seq_stat_mode not in ("none", "basic", "extended"):
             raise ValueError(
-                f"seq_stat_mode must be one of none/basic/extended, got {seq_stat_mode!r}")
-        if seq_item_cross_mode not in ('none', 'item_id'):
+                f"seq_stat_mode must be one of none/basic/extended, got {seq_stat_mode!r}"
+            )
+        if seq_item_cross_mode not in ("none", "item_id"):
             raise ValueError(
-                f"seq_item_cross_mode must be one of none/item_id, got {seq_item_cross_mode!r}")
-        if seq_item_cross_mode != 'none' and seq_stat_mode != 'extended':
+                f"seq_item_cross_mode must be one of none/item_id, got {seq_item_cross_mode!r}"
+            )
+        if seq_item_cross_mode != "none" and seq_stat_mode != "extended":
             raise ValueError("seq_item_cross_mode requires seq_stat_mode='extended'")
 
         # Accept either a directory or a single file path.
         if os.path.isdir(parquet_path):
             import glob
-            files = sorted(glob.glob(os.path.join(parquet_path, '*.parquet')))
+
+            files = sorted(glob.glob(os.path.join(parquet_path, "*.parquet")))
             if not files:
                 raise FileNotFoundError(f"No .parquet files in {parquet_path}")
             self._parquet_files = files
@@ -249,9 +310,15 @@ class PCVRParquetDataset(IterableDataset):
 
         # ---- Pre-allocate numpy buffers ----
         B = batch_size
-        self._buf_user_int = np.zeros((B, self.user_int_schema.total_dim), dtype=np.int64)
-        self._buf_item_int = np.zeros((B, self.item_int_schema.total_dim), dtype=np.int64)
-        self._buf_user_dense = np.zeros((B, self.user_dense_schema.total_dim), dtype=np.float32)
+        self._buf_user_int = np.zeros(
+            (B, self.user_int_schema.total_dim), dtype=np.int64
+        )
+        self._buf_item_int = np.zeros(
+            (B, self.item_int_schema.total_dim), dtype=np.int64
+        )
+        self._buf_user_dense = np.zeros(
+            (B, self.user_dense_schema.total_dim), dtype=np.float32
+        )
         self._buf_seq = {}
         self._buf_seq_tb = {}
         self._buf_seq_lens = {}
@@ -266,21 +333,21 @@ class PCVRParquetDataset(IterableDataset):
         self._user_int_plan = []  # [(col_idx, dim, offset, vocab_size), ...]
         offset = 0
         for fid, vs, dim in self._user_int_cols:
-            ci = self._col_idx.get(f'user_int_feats_{fid}')
+            ci = self._col_idx.get(f"user_int_feats_{fid}")
             self._user_int_plan.append((ci, dim, offset, vs))
             offset += dim
 
         self._item_int_plan = []
         offset = 0
         for fid, vs, dim in self._item_int_cols:
-            ci = self._col_idx.get(f'item_int_feats_{fid}')
+            ci = self._col_idx.get(f"item_int_feats_{fid}")
             self._item_int_plan.append((ci, dim, offset, vs))
             offset += dim
 
         self._user_dense_plan = []
         offset = 0
         for fid, dim in self._user_dense_cols:
-            ci = self._col_idx.get(f'user_dense_feats_{fid}')
+            ci = self._col_idx.get(f"user_dense_feats_{fid}")
             self._user_dense_plan.append((ci, dim, offset))
             offset += dim
 
@@ -292,10 +359,12 @@ class PCVRParquetDataset(IterableDataset):
             ts_fid = self.ts_fids[domain]
             side_plan = []
             for slot, fid in enumerate(sideinfo_fids):
-                ci = self._col_idx.get(f'{prefix}_{fid}')
+                ci = self._col_idx.get(f"{prefix}_{fid}")
                 vs = self.seq_vocab_sizes[domain][fid]
                 side_plan.append((ci, slot, vs))
-            ts_ci = self._col_idx.get(f'{prefix}_{ts_fid}') if ts_fid is not None else None
+            ts_ci = (
+                self._col_idx.get(f"{prefix}_{ts_fid}") if ts_fid is not None else None
+            )
             self._seq_plan[domain] = (side_plan, ts_ci)
 
         logging.info(
@@ -303,18 +372,19 @@ class PCVRParquetDataset(IterableDataset):
             f"{len(self._parquet_files)} file(s), batch_size={batch_size}, "
             f"buffer_batches={buffer_batches}, shuffle={shuffle}, "
             f"seq_stat_mode={self.seq_stat_mode}, "
-            f"seq_item_cross_mode={self.seq_item_cross_mode}")
+            f"seq_item_cross_mode={self.seq_item_cross_mode}"
+        )
         logging.info(f"seq_stat_dims: {self.seq_stat_dims}")
 
         logging.info(f"cols: {self._col_idx.keys()}")
 
     def _load_schema(self, schema_path: str, seq_max_lens: Dict[str, int]) -> None:
         """Populate per-group schema information from ``schema_path``."""
-        with open(schema_path, 'r', encoding='utf-8') as f:
+        with open(schema_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
 
         # ---- user_int: [[fid, vocab_size, dim], ...] ----
-        self._user_int_cols: List[List[int]] = raw['user_int']
+        self._user_int_cols: List[List[int]] = raw["user_int"]
         self.user_int_schema: FeatureSchema = FeatureSchema()
         self.user_int_vocab_sizes: List[int] = []
         for fid, vs, dim in self._user_int_cols:
@@ -322,7 +392,7 @@ class PCVRParquetDataset(IterableDataset):
             self.user_int_vocab_sizes.extend([vs] * dim)
 
         # ---- item_int ----
-        self._item_int_cols: List[List[int]] = raw['item_int']
+        self._item_int_cols: List[List[int]] = raw["item_int"]
         self.item_int_schema: FeatureSchema = FeatureSchema()
         self.item_int_vocab_sizes: List[int] = []
         for fid, vs, dim in self._item_int_cols:
@@ -330,7 +400,7 @@ class PCVRParquetDataset(IterableDataset):
             self.item_int_vocab_sizes.extend([vs] * dim)
 
         # ---- user_dense: [[fid, dim], ...] ----
-        self._user_dense_cols: List[List[int]] = raw['user_dense']
+        self._user_dense_cols: List[List[int]] = raw["user_dense"]
         self.user_dense_schema: FeatureSchema = FeatureSchema()
         for fid, dim in self._user_dense_cols:
             self.user_dense_schema.add(fid, dim)
@@ -339,7 +409,7 @@ class PCVRParquetDataset(IterableDataset):
         self.item_dense_schema: FeatureSchema = FeatureSchema()
 
         # ---- sequence domains ----
-        self._seq_cfg: Dict[str, Dict[str, Any]] = raw['seq']
+        self._seq_cfg: Dict[str, Dict[str, Any]] = raw["seq"]
         self.seq_domains: List[str] = sorted(self._seq_cfg.keys())
         self.seq_feature_ids: Dict[str, List[int]] = {}
         self.seq_vocab_sizes: Dict[str, Dict[int, int]] = {}
@@ -351,13 +421,13 @@ class PCVRParquetDataset(IterableDataset):
 
         for domain in self.seq_domains:
             cfg = self._seq_cfg[domain]
-            self._seq_prefix[domain] = cfg['prefix']
-            ts_fid = cfg['ts_fid']
+            self._seq_prefix[domain] = cfg["prefix"]
+            ts_fid = cfg["ts_fid"]
             self.ts_fids[domain] = ts_fid
 
-            all_fids = [fid for fid, vs in cfg['features']]
+            all_fids = [fid for fid, vs in cfg["features"]]
             self.seq_feature_ids[domain] = all_fids
-            self.seq_vocab_sizes[domain] = {fid: vs for fid, vs in cfg['features']}
+            self.seq_vocab_sizes[domain] = {fid: vs for fid, vs in cfg["features"]}
 
             sideinfo = [fid for fid in all_fids if fid != ts_fid]
             self.sideinfo_fids[domain] = sideinfo
@@ -370,35 +440,45 @@ class PCVRParquetDataset(IterableDataset):
 
     def _build_seq_stat_dims(self) -> Dict[str, int]:
         """Return the per-domain dense stat dimensions for the configured mode."""
-        if self.seq_stat_mode == 'none':
+        if self.seq_stat_mode == "none":
             return {domain: 0 for domain in self.seq_domains}
-        if self.seq_stat_mode == 'basic':
+        if self.seq_stat_mode == "basic":
             return {domain: 4 for domain in self.seq_domains}
         return {
             domain: (
-                18 + len(self.sideinfo_fids[domain])
-                + (3 * len(self.sideinfo_fids[domain])
-                   if self.seq_item_cross_mode == 'item_id' else 0)
+                18
+                + len(self.sideinfo_fids[domain])
+                + (
+                    3 * len(self.sideinfo_fids[domain])
+                    if self.seq_item_cross_mode == "item_id"
+                    else 0
+                )
             )
             for domain in self.seq_domains
         }
 
     def __len__(self) -> int:
         # Ceiling per Row Group; this is an upper bound on the true batch count.
-        return sum((n + self.batch_size - 1) // self.batch_size
-                   for _, _, n in self._rg_list)
+        return sum(
+            (n + self.batch_size - 1) // self.batch_size for _, _, n in self._rg_list
+        )
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         worker_info = torch.utils.data.get_worker_info()
         rg_list = self._rg_list
         if worker_info is not None and worker_info.num_workers > 1:
-            rg_list = [rg for i, rg in enumerate(rg_list)
-                       if i % worker_info.num_workers == worker_info.id]
+            rg_list = [
+                rg
+                for i, rg in enumerate(rg_list)
+                if i % worker_info.num_workers == worker_info.id
+            ]
 
         buffer: List[Dict[str, Any]] = []
         for file_path, rg_idx, _ in rg_list:
             pf = pq.ParquetFile(file_path)
-            for batch in pf.iter_batches(batch_size=self.batch_size, row_groups=[rg_idx]):
+            for batch in pf.iter_batches(
+                batch_size=self.batch_size, row_groups=[rg_idx]
+            ):
                 batch_dict = self._convert_batch(batch)
                 if self.shuffle and self.buffer_batches > 1:
                     buffer.append(batch_dict)
@@ -414,9 +494,7 @@ class PCVRParquetDataset(IterableDataset):
         del buffer
         gc.collect()
 
-    def _flush_buffer(
-        self, buffer: List[Dict[str, Any]]
-    ) -> Iterator[Dict[str, Any]]:
+    def _flush_buffer(self, buffer: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
         """Concatenate the buffered batches, shuffle at the row level, then
         re-slice and yield batch-sized chunks.
         """
@@ -427,8 +505,10 @@ class PCVRParquetDataset(IterableDataset):
                 merged[k] = torch.cat([b[k] for b in buffer], dim=0)
             else:
                 non_tensor_keys[k] = buffer[0][k]
-        total_rows = merged['label'].shape[0]
-        rand_idx = torch.randperm(total_rows) if self.shuffle else torch.arange(total_rows)
+        total_rows = merged["label"].shape[0]
+        rand_idx = (
+            torch.randperm(total_rows) if self.shuffle else torch.arange(total_rows)
+        )
         for i in range(0, total_rows, self.batch_size):
             end = min(i + self.batch_size, total_rows)
             batch: Dict[str, Any] = {k: v[rand_idx[i:end]] for k, v in merged.items()}
@@ -459,12 +539,15 @@ class PCVRParquetDataset(IterableDataset):
         mn = int(oob_vals.min())
         if key in self._oob_stats:
             s = self._oob_stats[key]
-            s['count'] += n
-            s['max'] = max(s['max'], mx)
-            s['min_oob'] = min(s['min_oob'], mn)
+            s["count"] += n
+            s["max"] = max(s["max"], mx)
+            s["min_oob"] = min(s["min_oob"], mn)
         else:
             self._oob_stats[key] = {
-                'count': n, 'max': mx, 'min_oob': mn, 'vocab': vocab_size,
+                "count": n,
+                "max": mx,
+                "min_oob": mn,
+                "vocab": vocab_size,
             }
         if self.clip_vocab:
             arr[oob_mask] = 0
@@ -472,7 +555,8 @@ class PCVRParquetDataset(IterableDataset):
             raise ValueError(
                 f"{group} col_idx={col_idx}: {n} values out of range "
                 f"[0, {vocab_size}), actual=[{mn}, {mx}]. "
-                f"Use clip_vocab=True to clip or fix schema.json")
+                f"Use clip_vocab=True to clip or fix schema.json"
+            )
 
     def dump_oob_stats(self, path: Optional[str] = None) -> None:
         """Dump out-of-bound statistics to a file if ``path`` is provided,
@@ -483,14 +567,15 @@ class PCVRParquetDataset(IterableDataset):
             return
         lines = ["=== Out-of-Bound Stats ==="]
         for (group, ci), s in sorted(self._oob_stats.items()):
-            direction = "TOO_HIGH" if s['min_oob'] >= s['vocab'] else "TOO_LOW"
+            direction = "TOO_HIGH" if s["min_oob"] >= s["vocab"] else "TOO_LOW"
             lines.append(
                 f"  {group} col_idx={ci}: vocab={s['vocab']}, "
                 f"oob_count={s['count']}, range=[{s['min_oob']}, {s['max']}], "
-                f"{direction}")
+                f"{direction}"
+            )
         msg = "\n".join(lines)
         if path:
-            with open(path, 'w') as f:
+            with open(path, "w") as f:
                 f.write(msg + "\n")
             logging.info(f"OOB stats written to {path}")
         else:
@@ -523,7 +608,7 @@ class PCVRParquetDataset(IterableDataset):
             if raw_len <= 0:
                 continue
             use_len = min(raw_len, max_len)
-            padded[i, :use_len] = values[start:start + use_len]
+            padded[i, :use_len] = values[start : start + use_len]
             lengths[i] = use_len
 
         padded[padded <= 0] = 0
@@ -552,7 +637,7 @@ class PCVRParquetDataset(IterableDataset):
             if raw_len <= 0:
                 continue
             use_len = min(raw_len, max_dim)
-            padded[i, :use_len] = values[start:start + use_len]
+            padded[i, :use_len] = values[start : start + use_len]
 
         return padded
 
@@ -561,16 +646,27 @@ class PCVRParquetDataset(IterableDataset):
         B = batch.num_rows
 
         # ---- meta ----
-        timestamps = batch.column(self._col_idx['timestamp']).to_numpy().astype(np.int64)
+        timestamps = (
+            batch.column(self._col_idx["timestamp"]).to_numpy().astype(np.int64)
+        )
         # label_times = batch.column(self._col_idx['label_time']).to_numpy().astype(np.int64)
         if self.is_training:
-            labels = (batch.column(self._col_idx['label_type']).fill_null(0)
-                      .to_numpy(zero_copy_only=False).astype(np.int64) == 2).astype(np.int64)
+            labels = (
+                batch.column(self._col_idx["label_type"])
+                .fill_null(0)
+                .to_numpy(zero_copy_only=False)
+                .astype(np.int64)
+                == 2
+            ).astype(np.int64)
         else:
             labels = np.zeros(B, dtype=np.int64)
-        user_ids = batch.column(self._col_idx['user_id']).to_pylist()
-        item_ids = batch.column(self._col_idx['item_id']).fill_null(0).to_numpy(
-            zero_copy_only=False).astype(np.int64)
+        user_ids = batch.column(self._col_idx["user_id"]).to_pylist()
+        item_ids = (
+            batch.column(self._col_idx["item_id"])
+            .fill_null(0)
+            .to_numpy(zero_copy_only=False)
+            .astype(np.int64)
+        )
         item_ids[item_ids <= 0] = 0
 
         # ---- user_int: write into pre-allocated buffer ----
@@ -587,17 +683,17 @@ class PCVRParquetDataset(IterableDataset):
                 arr = col.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int64)
                 arr[arr <= 0] = 0
                 if vs > 0:
-                    self._record_oob('user_int', ci, arr, vs)
+                    self._record_oob("user_int", ci, arr, vs)
                 else:
                     arr[:] = 0
                 user_int[:, offset] = arr
             else:
                 padded, _ = self._pad_varlen_int_column(col, dim, B)
                 if vs > 0:
-                    self._record_oob('user_int', ci, padded, vs)
+                    self._record_oob("user_int", ci, padded, vs)
                 else:
                     padded[:] = 0
-                user_int[:, offset:offset + dim] = padded
+                user_int[:, offset : offset + dim] = padded
 
         # ---- item_int ----
         item_int = self._buf_item_int[:B]
@@ -608,17 +704,17 @@ class PCVRParquetDataset(IterableDataset):
                 arr = col.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int64)
                 arr[arr <= 0] = 0
                 if vs > 0:
-                    self._record_oob('item_int', ci, arr, vs)
+                    self._record_oob("item_int", ci, arr, vs)
                 else:
                     arr[:] = 0
                 item_int[:, offset] = arr
             else:
                 padded, _ = self._pad_varlen_int_column(col, dim, B)
                 if vs > 0:
-                    self._record_oob('item_int', ci, padded, vs)
+                    self._record_oob("item_int", ci, padded, vs)
                 else:
                     padded[:] = 0
-                item_int[:, offset:offset + dim] = padded
+                item_int[:, offset : offset + dim] = padded
 
         # ---- user_dense ----
         user_dense = self._buf_user_dense[:B]
@@ -626,18 +722,18 @@ class PCVRParquetDataset(IterableDataset):
         for ci, dim, offset in self._user_dense_plan:
             col = batch.column(ci)
             padded = self._pad_varlen_float_column(col, dim, B)
-            user_dense[:, offset:offset + dim] = padded
+            user_dense[:, offset : offset + dim] = padded
 
         result = {
-            'user_int_feats': torch.from_numpy(user_int.copy()),
-            'user_dense_feats': torch.from_numpy(user_dense.copy()),
-            'item_int_feats': torch.from_numpy(item_int.copy()),
-            'item_dense_feats': torch.zeros(B, 0, dtype=torch.float32),
-            'label': torch.from_numpy(labels),
-            'timestamp': torch.from_numpy(timestamps),
+            "user_int_feats": torch.from_numpy(user_int.copy()),
+            "user_dense_feats": torch.from_numpy(user_dense.copy()),
+            "item_int_feats": torch.from_numpy(item_int.copy()),
+            "item_dense_feats": torch.zeros(B, 0, dtype=torch.float32),
+            "label": torch.from_numpy(labels),
+            "timestamp": torch.from_numpy(timestamps),
             # 'label_time': torch.from_numpy(label_times),
-            'user_id': user_ids,
-            '_seq_domains': self.seq_domains,
+            "user_id": user_ids,
+            "_seq_domains": self.seq_domains,
         }
 
         # ---- Sequence features: fused padding directly into the 3D buffer ----
@@ -667,7 +763,7 @@ class PCVRParquetDataset(IterableDataset):
                     if rl <= 0:
                         continue
                     ul = min(rl, max_len)
-                    out[i, c, :ul] = vals[s:s + ul]
+                    out[i, c, :ul] = vals[s : s + ul]
                     if rl > raw_lengths[i]:
                         raw_lengths[i] = rl
                     if ul > lengths[i]:
@@ -682,12 +778,12 @@ class PCVRParquetDataset(IterableDataset):
             for c, (_, _, vs, ci) in enumerate(col_data):
                 slice_c = out[:, c, :]
                 if vs > 0:
-                    self._record_oob(f'seq_{domain}', ci, slice_c, vs)
+                    self._record_oob(f"seq_{domain}", ci, slice_c, vs)
                 else:
                     slice_c[:] = 0
 
             result[domain] = torch.from_numpy(out.copy())
-            result[f'{domain}_len'] = torch.from_numpy(lengths.copy())
+            result[f"{domain}_len"] = torch.from_numpy(lengths.copy())
 
             # Time bucketing.
             time_bucket = self._buf_seq_tb[domain][:B]
@@ -705,7 +801,7 @@ class PCVRParquetDataset(IterableDataset):
                     if rl <= 0:
                         continue
                     ul = min(rl, max_len)
-                    ts_padded[i, :ul] = ts_vals[s:s + ul]
+                    ts_padded[i, :ul] = ts_vals[s : s + ul]
 
                 ts_expanded = timestamps.reshape(-1, 1)
                 # ts_expanded = label_times.reshape(-1, 1)
@@ -721,29 +817,36 @@ class PCVRParquetDataset(IterableDataset):
                 # largest boundary collapse into the last bucket.
                 raw_buckets = np.clip(
                     np.searchsorted(BUCKET_BOUNDARIES, time_diff.ravel()),
-                    0, len(BUCKET_BOUNDARIES) - 1,
+                    0,
+                    len(BUCKET_BOUNDARIES) - 1,
                 )
                 buckets = raw_buckets.reshape(B, max_len) + 1
                 buckets[ts_padded == 0] = 0
                 time_bucket[:] = buckets
 
-            result[f'{domain}_time_bucket'] = torch.from_numpy(time_bucket.copy())
+            result[f"{domain}_time_bucket"] = torch.from_numpy(time_bucket.copy())
 
-            if self.seq_stat_mode == 'basic':
+            if self.seq_stat_mode == "basic":
                 # Sequence count statistics: (B, 4) float32, log1p-normalized.
                 # [0] count_total  [1] count_1h  [2] count_1d  [3] count_7d
                 stat = np.empty((B, 4), dtype=np.float32)
                 stat[:, 0] = np.log1p(lengths)
                 if ts_ci is not None:
                     valid = time_bucket >= 1  # (B, max_len), excludes padding
-                    stat[:, 1] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1H), axis=1))
-                    stat[:, 2] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_1D), axis=1))
-                    stat[:, 3] = np.log1p(np.sum(valid & (time_bucket <= _STAT_BUCKET_7D), axis=1))
+                    stat[:, 1] = np.log1p(
+                        np.sum(valid & (time_bucket <= _STAT_BUCKET_1H), axis=1)
+                    )
+                    stat[:, 2] = np.log1p(
+                        np.sum(valid & (time_bucket <= _STAT_BUCKET_1D), axis=1)
+                    )
+                    stat[:, 3] = np.log1p(
+                        np.sum(valid & (time_bucket <= _STAT_BUCKET_7D), axis=1)
+                    )
                 else:
                     stat[:, 1:] = 0.0
-                result[f'{domain}_stat'] = torch.from_numpy(stat)
-            elif self.seq_stat_mode == 'extended':
-                result[f'{domain}_stat'] = torch.from_numpy(
+                result[f"{domain}_stat"] = torch.from_numpy(stat)
+            elif self.seq_stat_mode == "extended":
+                result[f"{domain}_stat"] = torch.from_numpy(
                     self._build_extended_seq_stat(
                         out=out,
                         lengths=lengths,
@@ -752,7 +855,8 @@ class PCVRParquetDataset(IterableDataset):
                         max_len=max_len,
                         has_timestamp=ts_ci is not None,
                         item_ids=item_ids,
-                    ))
+                    )
+                )
 
         return result
 
@@ -782,7 +886,7 @@ class PCVRParquetDataset(IterableDataset):
             match_count, has_match, recent_match_age for each side-info field
         """
         B, n_feats, _ = out.shape
-        cross_dim = 3 * n_feats if self.seq_item_cross_mode == 'item_id' else 0
+        cross_dim = 3 * n_feats if self.seq_item_cross_mode == "item_id" else 0
         stat = np.zeros((B, 18 + n_feats + cross_dim), dtype=np.float32)
         lengths_f = lengths.astype(np.float32)
         denom = np.maximum(lengths_f, 1.0)
@@ -792,12 +896,19 @@ class PCVRParquetDataset(IterableDataset):
         stat[:, 16] = (raw_lengths > max_len).astype(np.float32)
         stat[:, 17] = lengths_f / float(max_len)
 
-        valid = time_bucket >= 1 if has_timestamp else np.zeros_like(time_bucket, dtype=bool)
+        valid = (
+            time_bucket >= 1
+            if has_timestamp
+            else np.zeros_like(time_bucket, dtype=bool)
+        )
         if has_timestamp:
-            window_counts = np.stack([
-                np.sum(valid & (time_bucket <= bucket), axis=1)
-                for bucket in _EXT_STAT_BUCKETS
-            ], axis=1).astype(np.float32)
+            window_counts = np.stack(
+                [
+                    np.sum(valid & (time_bucket <= bucket), axis=1)
+                    for bucket in _EXT_STAT_BUCKETS
+                ],
+                axis=1,
+            ).astype(np.float32)
             stat[:, 1:7] = np.log1p(window_counts)
             stat[:, 7:13] = window_counts / denom.reshape(-1, 1)
 
@@ -822,8 +933,8 @@ class PCVRParquetDataset(IterableDataset):
             stat[:, 14] = np.log1p(avg_interval) / np.log1p(_EXT_STAT_MAX_AGE)
 
         nonzero_counts = np.sum(out != 0, axis=2).astype(np.float32)
-        stat[:, 18:18 + n_feats] = nonzero_counts / denom.reshape(-1, 1)
-        if self.seq_item_cross_mode == 'item_id':
+        stat[:, 18 : 18 + n_feats] = nonzero_counts / denom.reshape(-1, 1)
+        if self.seq_item_cross_mode == "item_id":
             base = 18 + n_feats
             item_ids_2d = item_ids.reshape(B, 1)
             for c in range(n_feats):
@@ -840,8 +951,9 @@ class PCVRParquetDataset(IterableDataset):
                         BUCKET_BOUNDARIES[np.maximum(min_bucket - 1, 0)],
                         0,
                     ).astype(np.float32)
-                    stat[:, base + 2 * n_feats + c] = (
-                        np.log1p(match_age) / np.log1p(_EXT_STAT_MAX_AGE))
+                    stat[:, base + 2 * n_feats + c] = np.log1p(match_age) / np.log1p(
+                        _EXT_STAT_MAX_AGE
+                    )
         return stat
 
 
@@ -857,8 +969,8 @@ def get_pcvr_data(
     seed: int = 42,
     clip_vocab: bool = True,
     seq_max_lens: Optional[Dict[str, int]] = None,
-    seq_stat_mode: str = 'basic',
-    seq_item_cross_mode: str = 'none',
+    seq_stat_mode: str = "basic",
+    seq_item_cross_mode: str = "none",
     **kwargs: Any,
 ) -> Tuple[DataLoader, DataLoader, PCVRParquetDataset]:
     """Create train / valid DataLoaders from raw multi-column Parquet files.
@@ -875,7 +987,8 @@ def get_pcvr_data(
     random.seed(seed)
 
     import glob as _glob
-    pq_files = sorted(_glob.glob(os.path.join(data_dir, '*.parquet')))
+
+    pq_files = sorted(_glob.glob(os.path.join(data_dir, "*.parquet")))
 
     rg_info = []
     for f in pq_files:
@@ -895,8 +1008,10 @@ def get_pcvr_data(
     train_rows = sum(r[2] for r in rg_info[:n_train_rgs])
     valid_rows = sum(r[2] for r in rg_info[n_train_rgs:])
 
-    logging.info(f"Row Group split: {n_train_rgs} train ({train_rows} rows), "
-                 f"{n_valid_rgs} valid ({valid_rows} rows)")
+    logging.info(
+        f"Row Group split: {n_train_rgs} train ({train_rows} rows), "
+        f"{n_valid_rgs} valid ({valid_rows} rows)"
+    )
 
     train_dataset = PCVRParquetDataset(
         parquet_path=data_dir,
@@ -914,12 +1029,15 @@ def get_pcvr_data(
     use_cuda = torch.cuda.is_available()
     _train_kw = {}
     if num_workers > 0:
-        _train_kw['persistent_workers'] = True
-        _train_kw['prefetch_factor'] = 2
+        _train_kw["persistent_workers"] = True
+        _train_kw["prefetch_factor"] = 2
 
     train_loader = DataLoader(
-        train_dataset, batch_size=None,
-        num_workers=num_workers, pin_memory=use_cuda, **_train_kw,
+        train_dataset,
+        batch_size=None,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        **_train_kw,
     )
 
     valid_dataset = PCVRParquetDataset(
@@ -935,13 +1053,17 @@ def get_pcvr_data(
         seq_item_cross_mode=seq_item_cross_mode,
     )
     valid_loader = DataLoader(
-        valid_dataset, batch_size=None,
-        num_workers=0, pin_memory=use_cuda,
+        valid_dataset,
+        batch_size=None,
+        num_workers=0,
+        pin_memory=use_cuda,
     )
 
-    logging.info(f"Parquet train: {train_rows} rows, valid: {valid_rows} rows, "
-                 f"batch_size={batch_size}, buffer_batches={buffer_batches}")
-    
+    logging.info(
+        f"Parquet train: {train_rows} rows, valid: {valid_rows} rows, "
+        f"batch_size={batch_size}, buffer_batches={buffer_batches}"
+    )
+
     # get the number of positive (label == 1) samples (3618/100w)
     # num_positive_samples = sum(1 for batch in train_loader if batch['label'].eq(1).any())
     # logging.info(f"Number of positive samples in training set: {num_positive_samples}")

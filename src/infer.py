@@ -70,7 +70,6 @@ _FALLBACK_MODEL_CFG = {
     "user_ns_tokens": 0,
     "item_ns_tokens": 0,
     "seq_stat_injection": "add",
-    "target_aware_mode": "attn",
 }
 
 _FALLBACK_SEQ_MAX_LENS = "seq_a:256,seq_b:256,seq_c:512,seq_d:512"
