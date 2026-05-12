@@ -141,7 +141,7 @@ class PCVRHyFormerRankingTrainer:
             self.dense_scheduler = None
 
         # 混合精度训练
-        self.mixed_precision = True
+        self.mixed_precision = False
         # self.scaler = torch.amp.GradScaler('cuda')
         self.scaler = None
         self.use_amp = True
@@ -397,10 +397,16 @@ class PCVRHyFormerRankingTrainer:
                         #     "FN/valid", val_confusion["FN"], total_step
                         # )
                         self.writer.add_scalar(
-                            "Recall/valid", val_confusion["TP"] / max(1, val_confusion["TP"] + val_confusion["FN"]), total_step
+                            "Recall/valid",
+                            val_confusion["TP"]
+                            / max(1, val_confusion["TP"] + val_confusion["FN"]),
+                            total_step,
                         )
                         self.writer.add_scalar(
-                            "Precision/valid", val_confusion["TP"] / max(1, val_confusion["TP"] + val_confusion["FP"]), total_step
+                            "Precision/valid",
+                            val_confusion["TP"]
+                            / max(1, val_confusion["TP"] + val_confusion["FP"]),
+                            total_step,
                         )
 
                     self._handle_validation_result(total_step, val_auc, val_logloss)
@@ -429,10 +435,16 @@ class PCVRHyFormerRankingTrainer:
                 # self.writer.add_scalar("FP/valid", val_confusion["FP"], total_step)
                 # self.writer.add_scalar("FN/valid", val_confusion["FN"], total_step)
                 self.writer.add_scalar(
-                    "Recall/valid", val_confusion["TP"] / max(1, val_confusion["TP"] + val_confusion["FN"]), total_step
+                    "Recall/valid",
+                    val_confusion["TP"]
+                    / max(1, val_confusion["TP"] + val_confusion["FN"]),
+                    total_step,
                 )
                 self.writer.add_scalar(
-                    "Precision/valid", val_confusion["TP"] / max(1, val_confusion["TP"] + val_confusion["FP"]), total_step
+                    "Precision/valid",
+                    val_confusion["TP"]
+                    / max(1, val_confusion["TP"] + val_confusion["FP"]),
+                    total_step,
                 )
             self._handle_validation_result(total_step, val_auc, val_logloss)
 

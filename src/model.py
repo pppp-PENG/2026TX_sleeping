@@ -577,6 +577,43 @@ class MultiSeqQueryGenerator(nn.Module):
         return q_tokens_list
 
 
+class NSOnlyQueryGenerator(nn.Module):
+    """Generate per-sequence Q tokens from NS tokens only."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_ns: int,
+        num_queries: int,
+        num_sequences: int,
+        hidden_mult: int = 4,
+    ) -> None:
+        super().__init__()
+        self.num_queries = num_queries
+        self.num_sequences = num_sequences
+        self.d_model = d_model
+
+        input_dim = num_ns * d_model
+        output_dim = num_sequences * num_queries * d_model
+        self.query_mlp = nn.Sequential(
+            nn.LayerNorm(input_dim),
+            nn.Linear(input_dim, d_model * hidden_mult),
+            nn.SiLU(),
+            nn.Linear(d_model * hidden_mult, output_dim),
+        )
+        self.query_norm = nn.LayerNorm(d_model)
+
+    def forward(self, ns_tokens: torch.Tensor) -> list:
+        B = ns_tokens.shape[0]
+        ns_flat = ns_tokens.view(B, -1)
+        q_tokens = self.query_mlp(ns_flat)
+        q_tokens = q_tokens.view(
+            B, self.num_sequences, self.num_queries, self.d_model
+        )
+        q_tokens = self.query_norm(q_tokens)
+        return [q_tokens[:, i] for i in range(self.num_sequences)]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Sequence Encoders
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1525,6 +1562,13 @@ class PCVRHyFormer(nn.Module):
             recent_k=query_recent_k,
             attn_heads=num_heads,
         )
+        # self.query_generator_ns_only = NSOnlyQueryGenerator(
+        #     d_model=d_model,
+        #     num_ns=self.num_ns,
+        #     num_queries=num_queries,
+        #     num_sequences=self.num_sequences,
+        #     hidden_mult=hidden_mult,
+        # )
 
         # MultiSeqHyFormerBlock stack
         self.blocks = nn.ModuleList(
@@ -1852,8 +1896,9 @@ class PCVRHyFormer(nn.Module):
             seq_tokens_list.append(tokens)
             seq_masks_list.append(mask)
 
-        # 3. Generate independent Q tokens per sequence via MultiSeqQueryGenerator
+        # 3. Generate independent Q tokens per sequence from NS tokens.
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
+        # q_tokens_list = self.query_generator_ns_only(ns_tokens)
 
         # 4. Dropout + MultiSeqHyFormerBlock stack + output projection
         output = self._run_multi_seq_blocks(
@@ -1908,6 +1953,7 @@ class PCVRHyFormer(nn.Module):
             seq_masks_list.append(mask)
 
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
+        # q_tokens_list = self.query_generator_ns_only(ns_tokens)
 
         output = self._run_multi_seq_blocks(
             q_tokens_list,
