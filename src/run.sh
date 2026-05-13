@@ -12,6 +12,7 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
 #     --emb_skip_threshold 1000000 \
 #     --num_workers 8 \
 #     --dropout_rate 0.1 \
+#     --query_pooling_type attn \
 #     "$@"
 
 # ---- Alternative config: GroupNSTokenizer driven by ns_groups.json ----
@@ -27,4 +28,5 @@ python3 -u "${SCRIPT_DIR}/train.py" \
     --emb_skip_threshold 1000000 \
     --num_workers 8 \
     --dropout_rate 0.1 \
+    --query_pooling_type attn \
     "$@"

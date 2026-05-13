@@ -224,6 +224,13 @@ def parse_args() -> argparse.Namespace:
         "(only effective when --seq_encoder_type=longer)",
     )
     parser.add_argument(
+        "--query_pooling_type",
+        type=str,
+        default="mean",
+        choices=["mean", "attn"],
+        help="Sequence pooling used inside MultiSeqQueryGenerator",
+    )
+    parser.add_argument(
         "--action_num",
         type=int,
         default=1,
@@ -497,6 +504,7 @@ def main() -> None:
         "dropout_rate": args.dropout_rate,
         "seq_top_k": args.seq_top_k,
         "seq_causal": args.seq_causal,
+        "query_pooling_type": args.query_pooling_type,
         "action_num": args.action_num,
         "num_time_buckets": NUM_TIME_BUCKETS if args.use_time_buckets else 0,
         "rank_mixer_mode": args.rank_mixer_mode,

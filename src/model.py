@@ -417,7 +417,7 @@ class MultiSeqQueryGenerator(nn.Module):
 
     Generates Q tokens independently for each sequence:
     For each sequence i:
-        GlobalInfo_i = Concat(F1..FM, MeanPool(Seq_i))
+        GlobalInfo_i = Concat(F1..FM, Pool(Seq_i))
         Q_i = [FFN_{i,1}(GlobalInfo_i), ..., FFN_{i,N}(GlobalInfo_i)]
     """
 
@@ -427,17 +427,33 @@ class MultiSeqQueryGenerator(nn.Module):
         num_ns: int,
         num_queries: int,
         num_sequences: int,
-        hidden_mult: int = 4
+        hidden_mult: int = 4,
+        pooling_type: str = 'attn',
     ) -> None:
         super().__init__()
+        if pooling_type not in ('mean', 'attn'):
+            raise ValueError(f"Unknown query pooling type: {pooling_type}")
         self.num_queries = num_queries
         self.num_sequences = num_sequences
         self.d_model = d_model
+        self.pooling_type = pooling_type
 
         global_info_dim = (num_ns + 1) * d_model
 
         # LayerNorm on global_info to prevent gradient explosion from large-dim concat
         self.global_info_norm = nn.LayerNorm(global_info_dim)
+        if pooling_type == 'attn':
+            self.seq_attn_poolers = nn.ModuleList([
+                nn.Sequential(
+                    nn.LayerNorm(d_model),
+                    nn.Linear(d_model, d_model),
+                    nn.Tanh(),
+                    nn.Linear(d_model, 1, bias=False),
+                )
+                for _ in range(num_sequences)
+            ])
+        else:
+            self.seq_attn_poolers = nn.ModuleList()
 
         # Each sequence has N independent FFNs
         self.query_ffns_per_seq = nn.ModuleList([
@@ -452,6 +468,28 @@ class MultiSeqQueryGenerator(nn.Module):
             ])
             for _ in range(num_sequences)
         ])
+
+    def _pool_sequence(
+        self,
+        seq_idx: int,
+        seq_tokens: torch.Tensor,
+        seq_padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Pool sequence tokens for query generation."""
+        valid_mask = ~seq_padding_mask  # True = valid
+        valid_mask_expanded = valid_mask.unsqueeze(-1).float()  # (B, L_i, 1)
+
+        if self.pooling_type == 'mean':
+            seq_sum = (seq_tokens * valid_mask_expanded).sum(dim=1)  # (B, D)
+            seq_count = valid_mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
+            return seq_sum / seq_count
+
+        scores = self.seq_attn_poolers[seq_idx](seq_tokens).squeeze(-1)  # (B, L_i)
+        scores = scores.masked_fill(seq_padding_mask, torch.finfo(scores.dtype).min)
+        attn = torch.softmax(scores, dim=1)
+        attn = attn.masked_fill(seq_padding_mask, 0.0)
+        attn = attn / attn.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        return torch.bmm(attn.unsqueeze(1), seq_tokens).squeeze(1)  # (B, D)
 
     def forward(
         self,
@@ -475,12 +513,8 @@ class MultiSeqQueryGenerator(nn.Module):
 
         q_tokens_list = []
         for i in range(self.num_sequences):
-            # MeanPool(Seq_i)
-            valid_mask = ~seq_padding_masks[i]  # True = valid
-            valid_mask_expanded = valid_mask.unsqueeze(-1).float()  # (B, L_i, 1)
-            seq_sum = (seq_tokens_list[i] * valid_mask_expanded).sum(dim=1)  # (B, D)
-            seq_count = valid_mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
-            seq_pooled = seq_sum / seq_count  # (B, D)
+            seq_pooled = self._pool_sequence(
+                i, seq_tokens_list[i], seq_padding_masks[i])
 
             # GlobalInfo_i = Concat(NS_flat, seq_pooled_i)
             global_info = torch.cat([ns_flat, seq_pooled], dim=-1)  # (B, (M+1)*D)
@@ -1225,6 +1259,7 @@ class PCVRHyFormer(nn.Module):
         rope_base: float = 10000.0,
         emb_skip_threshold: int = 0,
         seq_id_threshold: int = 10000,
+        query_pooling_type: str = 'attn',
         # NS tokenizer variant
         ns_tokenizer_type: str = 'rankmixer',
         user_ns_tokens: int = 0,
@@ -1243,6 +1278,7 @@ class PCVRHyFormer(nn.Module):
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
         self.seq_id_threshold = seq_id_threshold
+        self.query_pooling_type = query_pooling_type
         self.ns_tokenizer_type = ns_tokenizer_type
 
         # ================== NS Tokens Construction ==================
@@ -1385,6 +1421,7 @@ class PCVRHyFormer(nn.Module):
             num_queries=num_queries,
             num_sequences=self.num_sequences,
             hidden_mult=hidden_mult,
+            pooling_type=query_pooling_type,
         )
 
         # MultiSeqHyFormerBlock stack

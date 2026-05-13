@@ -58,6 +58,7 @@ _FALLBACK_MODEL_CFG = {
     'dropout_rate': 0.01,
     'seq_top_k': 50,
     'seq_causal': False,
+    'query_pooling_type': 'attn',
     'action_num': 1,
     'num_time_buckets': NUM_TIME_BUCKETS,
     'rank_mixer_mode': 'full',
