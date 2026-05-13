@@ -230,7 +230,7 @@ class PCVRHyFormerRankingTrainer:
         ckpt_dir = os.path.join(self.save_dir, dir_name)
         os.makedirs(ckpt_dir, exist_ok=True)
         if not skip_model_file:
-            torch.save(self.model.state_dict(), os.path.join(ckpt_dir, "model.pt"))
+            torch.save(getattr(self.model, "_orig_mod", self.model).state_dict(), os.path.join(ckpt_dir, "model.pt"))
         self._write_sidecar_files(ckpt_dir)
         logging.info(f"Saved checkpoint to {ckpt_dir}/model.pt")
         return ckpt_dir
@@ -537,6 +537,12 @@ class PCVRHyFormerRankingTrainer:
                     loss = sigmoid_focal_loss(
                         logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma
                     )
+                elif self.loss_type == "bce_and_focal":
+                    loss_bce = F.binary_cross_entropy_with_logits(logits, label)
+                    loss_focal = sigmoid_focal_loss(
+                        logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma
+                    )
+                    loss = loss_bce + loss_focal
                 else:
                     loss = F.binary_cross_entropy_with_logits(logits, label)
 
@@ -554,6 +560,12 @@ class PCVRHyFormerRankingTrainer:
                 loss = sigmoid_focal_loss(
                     logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma
                 )
+            elif self.loss_type == "bce_and_focal":
+                loss_bce = F.binary_cross_entropy_with_logits(logits, label)
+                loss_focal = sigmoid_focal_loss(
+                    logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma
+                )
+                loss = loss_bce + loss_focal
             else:
                 loss = F.binary_cross_entropy_with_logits(logits, label)
 

@@ -66,7 +66,7 @@ _FALLBACK_MODEL_CFG = {
     "rope_base": 10000.0,
     "emb_skip_threshold": 0,
     "seq_id_threshold": 10000,
-    "ns_tokenizer_type": "rankmixer",
+    "ns_tokenizer_type": "group",
     "user_ns_tokens": 0,
     "item_ns_tokens": 0,
     "seq_stat_injection": "add",
@@ -417,6 +417,8 @@ def main() -> None:
     all_probs = []
     all_user_ids = []
     logging.info("Starting inference...")
+
+    model = torch.compile(model)
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):

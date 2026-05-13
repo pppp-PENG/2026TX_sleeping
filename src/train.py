@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--patience",
         type=int,
-        default=1,
+        default=2,
         help="Early-stopping patience " "(number of validations without improvement)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -298,8 +298,8 @@ def parse_args() -> argparse.Namespace:
         "--loss_type",
         type=str,
         default="bce",
-        choices=["bce", "focal"],
-        help="Loss type: bce = BCEWithLogits, focal = Focal Loss",
+        choices=["bce", "focal", "bce_and_focal"],
+        help="Loss type: bce = BCEWithLogits, focal = Focal Loss, bce_and_focal = Both BCE and Focal Loss",
     )
     parser.add_argument(
         "--focal_alpha",
@@ -558,6 +558,7 @@ def main() -> None:
     }
 
     model = PCVRHyFormer(**model_args).to(args.device)
+    model = torch.compile(model)
 
     # Log model sizing info.
     num_sequences = len(pcvr_dataset.seq_domains)
