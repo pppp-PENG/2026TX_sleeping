@@ -78,6 +78,26 @@ def parse_args() -> argparse.Namespace:
         help="Learning rate for dense parameters (AdamW)",
     )
     parser.add_argument(
+        "--lr_scheduler",
+        type=str,
+        default="cosine",
+        choices=["none", "cosine"],
+        help="Learning-rate scheduler for dense parameters",
+    )
+    parser.add_argument(
+        "--lr_min",
+        type=float,
+        default=0.0,
+        help="Minimum dense learning rate for cosine annealing",
+    )
+    parser.add_argument(
+        "--lr_cosine_t_max",
+        type=int,
+        default=0,
+        help="T_max for cosine annealing, in optimizer steps "
+        "(0 = use num_epochs * len(train_loader))",
+    )
+    parser.add_argument(
         "--num_epochs",
         type=int,
         default=999,
@@ -522,6 +542,9 @@ def main() -> None:
         train_loader=train_loader,
         valid_loader=valid_loader,
         lr=args.lr,
+        lr_scheduler=args.lr_scheduler,
+        lr_min=args.lr_min,
+        lr_cosine_t_max=args.lr_cosine_t_max,
         num_epochs=args.num_epochs,
         device=args.device,
         save_dir=args.ckpt_dir,

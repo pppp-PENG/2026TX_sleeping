@@ -45,6 +45,9 @@ class PCVRHyFormerRankingTrainer:
         device: str,
         save_dir: str,
         early_stopping: EarlyStopping,
+        lr_scheduler: str = 'cosine',
+        lr_min: float = 0.0,
+        lr_cosine_t_max: int = 0,
         loss_type: str = 'bce',
         focal_alpha: float = 0.1,
         focal_gamma: float = 2.0,
@@ -93,6 +96,21 @@ class PCVRHyFormerRankingTrainer:
                 model.parameters(), lr=lr, betas=(0.9, 0.98)
             )
 
+        self.lr_scheduler_type: str = lr_scheduler
+        self.lr_min: float = lr_min
+        default_cosine_t_max = max(1, num_epochs * len(train_loader))
+        self.lr_cosine_t_max: int = lr_cosine_t_max or default_cosine_t_max
+        if self.lr_scheduler_type == 'cosine':
+            self.dense_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = (
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.dense_optimizer,
+                    T_max=self.lr_cosine_t_max,
+                    eta_min=self.lr_min,
+                )
+            )
+        else:
+            self.dense_scheduler = None
+
         self.num_epochs: int = num_epochs
         self.device: str = device
         self.save_dir: str = save_dir
@@ -110,7 +128,13 @@ class PCVRHyFormerRankingTrainer:
 
         logging.info(f"PCVRHyFormerRankingTrainer loss_type={loss_type}, "
                      f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
-                     f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}")
+                     f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}, "
+                     f"lr_scheduler={lr_scheduler}, lr_min={lr_min}, "
+                     f"lr_cosine_t_max={self.lr_cosine_t_max}")
+
+    def _get_dense_lr(self) -> float:
+        """Return the current learning rate of the dense AdamW optimizer."""
+        return float(self.dense_optimizer.param_groups[0]['lr'])
 
     def _build_step_dir_name(self, global_step: int, is_best: bool = False) -> str:
         """Build a checkpoint sub-directory name such as
@@ -422,6 +446,8 @@ class PCVRHyFormerRankingTrainer:
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0, foreach=False)
 
         self.dense_optimizer.step()
+        if self.dense_scheduler is not None:
+            self.dense_scheduler.step()
         if self.sparse_optimizer is not None:
             self.sparse_optimizer.step()
 
