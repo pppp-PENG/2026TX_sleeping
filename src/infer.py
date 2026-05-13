@@ -29,9 +29,10 @@ from torch.utils.data import DataLoader
 from dataset import FeatureSchema, PCVRParquetDataset, NUM_TIME_BUCKETS
 from model import PCVRHyFormer, ModelInput
 
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(levelname)s - %(message)s',
 )
 
 
@@ -47,34 +48,29 @@ logging.basicConfig(
 # When the feature is enabled we therefore use the constant exposed by the
 # dataset module; ``0`` means disabled.
 _FALLBACK_MODEL_CFG = {
-    "d_model": 64,
-    "emb_dim": 64,
-    "num_queries": 1,
-    "query_pooling_mode": "attn",
-    "query_recent_k": 32,
-    "num_hyformer_blocks": 2,
-    "num_heads": 4,
-    "seq_encoder_type": "transformer",
-    "hidden_mult": 4,
-    "dropout_rate": 0.01,
-    "seq_top_k": 50,
-    "seq_causal": False,
-    "action_num": 1,
-    "num_time_buckets": NUM_TIME_BUCKETS,
-    "rank_mixer_mode": "full",
-    "use_rope": True,
-    "rope_base": 10000.0,
-    "emb_skip_threshold": 0,
-    "seq_id_threshold": 10000,
-    "ns_tokenizer_type": "group",
-    "user_ns_tokens": 0,
-    "item_ns_tokens": 0,
-    "seq_stat_injection": "add",
+    'd_model': 64,
+    'emb_dim': 64,
+    'num_queries': 1,
+    'num_hyformer_blocks': 2,
+    'num_heads': 4,
+    'seq_encoder_type': 'transformer',
+    'hidden_mult': 4,
+    'dropout_rate': 0.01,
+    'seq_top_k': 50,
+    'seq_causal': False,
+    'action_num': 1,
+    'num_time_buckets': NUM_TIME_BUCKETS,
+    'rank_mixer_mode': 'full',
+    'use_rope': False,
+    'rope_base': 10000.0,
+    'emb_skip_threshold': 0,
+    'seq_id_threshold': 10000,
+    'ns_tokenizer_type': 'rankmixer',
+    'user_ns_tokens': 0,
+    'item_ns_tokens': 0,
 }
 
-_FALLBACK_SEQ_MAX_LENS = "seq_a:256,seq_b:256,seq_c:512,seq_d:512"
-_FALLBACK_SEQ_STAT_MODE = "basic"
-_FALLBACK_SEQ_ITEM_CROSS_MODE = "none"
+_FALLBACK_SEQ_MAX_LENS = 'seq_a:256,seq_b:256,seq_c:512,seq_d:512'
 _FALLBACK_BATCH_SIZE = 256
 _FALLBACK_NUM_WORKERS = 16
 
@@ -93,7 +89,7 @@ def build_feature_specs(
     """
     specs: List[Tuple[int, int, int]] = []
     for fid, offset, length in schema.entries:
-        vs = max(per_position_vocab_sizes[offset : offset + length])
+        vs = max(per_position_vocab_sizes[offset:offset + length])
         specs.append((vs, offset, length))
     return specs
 
@@ -101,8 +97,8 @@ def build_feature_specs(
 def _parse_seq_max_lens(sml_str: str) -> Dict[str, int]:
     """Parse a string like ``'seq_a:256,seq_b:256,...'`` into a dict."""
     seq_max_lens: Dict[str, int] = {}
-    for pair in sml_str.split(","):
-        k, v = pair.split(":")
+    for pair in sml_str.split(','):
+        k, v = pair.split(':')
         seq_max_lens[k.strip()] = int(v.strip())
     return seq_max_lens
 
@@ -113,17 +109,16 @@ def load_train_config(model_dir: str) -> Dict[str, Any]:
     Returns an empty dict (which triggers fallback resolution) if the file is
     not present.
     """
-    train_config_path = os.path.join(model_dir, "train_config.json")
+    train_config_path = os.path.join(model_dir, 'train_config.json')
     if os.path.exists(train_config_path):
-        with open(train_config_path, "r") as f:
+        with open(train_config_path, 'r') as f:
             cfg = json.load(f)
         logging.info(f"Loaded train_config from {train_config_path}")
         return cfg
     logging.warning(
         f"train_config.json not found in {model_dir}, "
         f"falling back to hardcoded defaults. "
-        f"Shape mismatch may occur if training used non-default hyperparameters."
-    )
+        f"Shape mismatch may occur if training used non-default hyperparameters.")
     return {}
 
 
@@ -143,17 +138,16 @@ def resolve_model_cfg(train_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     cfg: Dict[str, Any] = {}
     for key in _MODEL_CFG_KEYS:
-        if key == "num_time_buckets":
-            if "num_time_buckets" in train_config:
-                cfg[key] = train_config["num_time_buckets"]
-            elif "use_time_buckets" in train_config:
-                cfg[key] = NUM_TIME_BUCKETS if train_config["use_time_buckets"] else 0
+        if key == 'num_time_buckets':
+            if 'num_time_buckets' in train_config:
+                cfg[key] = train_config['num_time_buckets']
+            elif 'use_time_buckets' in train_config:
+                cfg[key] = NUM_TIME_BUCKETS if train_config['use_time_buckets'] else 0
             else:
                 cfg[key] = _FALLBACK_MODEL_CFG[key]
                 logging.warning(
                     f"train_config missing both 'num_time_buckets' and 'use_time_buckets', "
-                    f"using fallback = {cfg[key]}"
-                )
+                    f"using fallback = {cfg[key]}")
             continue
 
         if key in train_config:
@@ -161,8 +155,7 @@ def resolve_model_cfg(train_config: Dict[str, Any]) -> Dict[str, Any]:
         else:
             cfg[key] = _FALLBACK_MODEL_CFG[key]
             logging.warning(
-                f"train_config missing '{key}', using fallback = {cfg[key]}"
-            )
+                f"train_config missing '{key}', using fallback = {cfg[key]}")
     return cfg
 
 
@@ -170,7 +163,7 @@ def build_model(
     dataset: PCVRParquetDataset,
     model_cfg: Dict[str, Any],
     ns_groups_json: Optional[str] = None,
-    device: str = "cpu",
+    device: str = 'cpu',
 ) -> PCVRHyFormer:
     """Construct a ``PCVRHyFormer`` from the dataset schema, an NS-groups JSON,
     and a resolved ``model_cfg`` dict.
@@ -193,7 +186,7 @@ def build_model(
     item_ns_groups: List[List[int]]
     if ns_groups_json and os.path.exists(ns_groups_json):
         logging.info(f"Loading NS groups from {ns_groups_json}")
-        with open(ns_groups_json, "r") as f:
+        with open(ns_groups_json, 'r') as f:
             ns_groups_cfg = json.load(f)
         user_fid_to_idx = {
             fid: i for i, (fid, _, _) in enumerate(dataset.user_int_schema.entries)
@@ -204,11 +197,11 @@ def build_model(
         try:
             user_ns_groups = [
                 [user_fid_to_idx[f] for f in fids]
-                for fids in ns_groups_cfg["user_ns_groups"].values()
+                for fids in ns_groups_cfg['user_ns_groups'].values()
             ]
             item_ns_groups = [
                 [item_fid_to_idx[f] for f in fids]
-                for fids in ns_groups_cfg["item_ns_groups"].values()
+                for fids in ns_groups_cfg['item_ns_groups'].values()
             ]
         except KeyError as exc:
             raise KeyError(
@@ -217,19 +210,15 @@ def build_model(
                 f"and schema.json must come from the same training run."
             ) from exc
     else:
-        logging.info(
-            "No NS groups JSON found, using default: each feature as one group"
-        )
+        logging.info("No NS groups JSON found, using default: each feature as one group")
         user_ns_groups = [[i] for i in range(len(dataset.user_int_schema.entries))]
         item_ns_groups = [[i] for i in range(len(dataset.item_int_schema.entries))]
 
     # Feature specs.
     user_int_feature_specs = build_feature_specs(
-        dataset.user_int_schema, dataset.user_int_vocab_sizes
-    )
+        dataset.user_int_schema, dataset.user_int_vocab_sizes)
     item_int_feature_specs = build_feature_specs(
-        dataset.item_int_schema, dataset.item_int_vocab_sizes
-    )
+        dataset.item_int_schema, dataset.item_int_vocab_sizes)
 
     logging.info(f"Building PCVRHyFormer with cfg: {model_cfg}")
     model = PCVRHyFormer(
@@ -240,7 +229,6 @@ def build_model(
         seq_vocab_sizes=dataset.seq_domain_vocab_sizes,
         user_ns_groups=user_ns_groups,
         item_ns_groups=item_ns_groups,
-        seq_stat_dims=dataset.seq_stat_dims,
         **model_cfg,
     ).to(device)
 
@@ -263,8 +251,7 @@ def load_model_state_strict(
             "Failed to load state_dict in strict mode. This usually means the "
             "model constructed by build_model does NOT match the checkpoint. "
             "Check that train_config.json in the ckpt dir is present and matches "
-            "the training hyperparameters."
-        )
+            "the training hyperparameters.")
         raise e
 
 
@@ -293,67 +280,57 @@ def _batch_to_model_input(
         else:
             device_batch[k] = v
 
-    seq_domains = device_batch["_seq_domains"]
+    seq_domains = device_batch['_seq_domains']
     seq_data: Dict[str, torch.Tensor] = {}
     seq_lens: Dict[str, torch.Tensor] = {}
     seq_time_buckets: Dict[str, torch.Tensor] = {}
-    seq_stats: Dict[str, torch.Tensor] = {}
     for domain in seq_domains:
         seq_data[domain] = device_batch[domain]
-        seq_lens[domain] = device_batch[f"{domain}_len"]
+        seq_lens[domain] = device_batch[f'{domain}_len']
         B, _, L = device_batch[domain].shape
         seq_time_buckets[domain] = device_batch.get(
-            f"{domain}_time_bucket", torch.zeros(B, L, dtype=torch.long, device=device)
-        )
-        if f"{domain}_stat" in device_batch:
-            seq_stats[domain] = device_batch[f"{domain}_stat"]
+            f'{domain}_time_bucket',
+            torch.zeros(B, L, dtype=torch.long, device=device))
 
     return ModelInput(
-        user_int_feats=device_batch["user_int_feats"],
-        item_int_feats=device_batch["item_int_feats"],
-        user_dense_feats=device_batch["user_dense_feats"],
-        item_dense_feats=device_batch["item_dense_feats"],
+        user_int_feats=device_batch['user_int_feats'],
+        item_int_feats=device_batch['item_int_feats'],
+        user_dense_feats=device_batch['user_dense_feats'],
+        item_dense_feats=device_batch['item_dense_feats'],
         seq_data=seq_data,
         seq_lens=seq_lens,
         seq_time_buckets=seq_time_buckets,
-        seq_stats=seq_stats,
     )
 
 
 def main() -> None:
     # ---- Read environment variables ----
-    model_dir = os.environ.get("MODEL_OUTPUT_PATH")
-    data_dir = os.environ.get("EVAL_DATA_PATH")
-    result_dir = os.environ.get("EVAL_RESULT_PATH")
+    model_dir = os.environ.get('MODEL_OUTPUT_PATH')
+    data_dir = os.environ.get('EVAL_DATA_PATH')
+    result_dir = os.environ.get('EVAL_RESULT_PATH')
 
     os.makedirs(result_dir, exist_ok=True)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # ---- Schema: prefer the one from model_dir (to exactly match training);
     #      fall back to the one in data_dir if missing. ----
-    schema_path = os.path.join(model_dir, "schema.json")
+    schema_path = os.path.join(model_dir, 'schema.json')
     if not os.path.exists(schema_path):
-        schema_path = os.path.join(data_dir, "schema.json")
+        schema_path = os.path.join(data_dir, 'schema.json')
     logging.info(f"Using schema: {schema_path}")
 
     # ---- Load train_config.json (single source of truth for all hyperparams) ----
     train_config = load_train_config(model_dir)
 
     # ---- Parse seq_max_lens ----
-    sml_str = train_config.get("seq_max_lens", _FALLBACK_SEQ_MAX_LENS)
+    sml_str = train_config.get('seq_max_lens', _FALLBACK_SEQ_MAX_LENS)
     seq_max_lens = _parse_seq_max_lens(sml_str)
     logging.info(f"seq_max_lens: {seq_max_lens}")
-    seq_stat_mode = train_config.get("seq_stat_mode", _FALLBACK_SEQ_STAT_MODE)
-    logging.info(f"seq_stat_mode: {seq_stat_mode}")
-    seq_item_cross_mode = train_config.get(
-        "seq_item_cross_mode", _FALLBACK_SEQ_ITEM_CROSS_MODE
-    )
-    logging.info(f"seq_item_cross_mode: {seq_item_cross_mode}")
 
     # ---- Data loading: reuse batch_size / num_workers from training config ----
-    batch_size = int(train_config.get("batch_size", _FALLBACK_BATCH_SIZE))
-    num_workers = int(train_config.get("num_workers", _FALLBACK_NUM_WORKERS))
+    batch_size = int(train_config.get('batch_size', _FALLBACK_BATCH_SIZE))
+    num_workers = int(train_config.get('num_workers', _FALLBACK_NUM_WORKERS))
 
     test_dataset = PCVRParquetDataset(
         parquet_path=data_dir,
@@ -363,8 +340,6 @@ def main() -> None:
         shuffle=False,
         buffer_batches=0,
         is_training=False,
-        seq_stat_mode=seq_stat_mode,
-        seq_item_cross_mode=seq_item_cross_mode,
     )
     total_test_samples = test_dataset.num_rows
     logging.info(f"Total test samples: {total_test_samples}")
@@ -377,7 +352,7 @@ def main() -> None:
     # JSON into the ckpt dir, train_config records just the basename, so try
     # resolving against ``model_dir`` first before honoring the raw (possibly
     # absolute) path as a fallback.
-    ns_groups_json = train_config.get("ns_groups_json", None)
+    ns_groups_json = train_config.get('ns_groups_json', None)
     if ns_groups_json:
         local_candidate = os.path.join(model_dir, os.path.basename(ns_groups_json))
         if os.path.exists(local_candidate):
@@ -418,12 +393,10 @@ def main() -> None:
     all_user_ids = []
     logging.info("Starting inference...")
 
-    model = torch.compile(model)
-
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
             model_input = _batch_to_model_input(batch, device)
-            user_ids = batch.get("user_id", [])
+            user_ids = batch.get('user_id', [])
 
             logits, _ = model.predict(model_input)
             logits = logits.squeeze(-1)
@@ -441,8 +414,8 @@ def main() -> None:
     }
 
     # ---- Save predictions.json ----
-    output_path = os.path.join(result_dir, "predictions.json")
-    with open(output_path, "w") as f:
+    output_path = os.path.join(result_dir, 'predictions.json')
+    with open(output_path, 'w') as f:
         json.dump(predictions, f)
     logging.info(f"Saved {len(all_probs)} predictions to {output_path}")
 

@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--patience",
         type=int,
-        default=2,
+        default=5,
         help="Early-stopping patience " "(number of validations without improvement)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -133,35 +133,6 @@ def parse_args() -> argparse.Namespace:
         default="seq_a:256,seq_b:256,seq_c:512,seq_d:512",
         help="Per-domain sequence truncation, format: seq_d:256,seq_c:128",
     )
-    parser.add_argument(
-        "--seq_stat_mode",
-        type=str,
-        default="basic",
-        choices=["none", "basic", "extended"],
-        help="Sequence dense-stat feature mode. "
-        "none disables *_stat features; basic keeps the "
-        "original 4 count stats; extended adds recency, "
-        "window ratios, truncation and coverage stats.",
-    )
-    parser.add_argument(
-        "--seq_item_cross_mode",
-        type=str,
-        default="none",
-        choices=["none", "item_id"],
-        help="Target-item/history cross feature mode. "
-        "item_id appends exact-match stats between item_id "
-        "and every sequence side-info field; requires "
-        "--seq_stat_mode extended.",
-    )
-    parser.add_argument(
-        "--seq_stat_injection",
-        type=str,
-        default="add",
-        choices=["add", "token"],
-        help="How sequence dense stats enter the sequence encoder: "
-        "add broadcasts the projected stats to every behavior "
-        "token; token prepends one learned stat token per domain.",
-    )
 
     # Model hyperparameters.
     parser.add_argument(
@@ -181,23 +152,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of Query tokens generated independently per sequence domain",
-    )
-    parser.add_argument(
-        "--query_pooling_mode",
-        type=str,
-        default="mean",
-        choices=["mean", "mean_recent", "attn"],
-        help="Sequence summaries used by the query generator: "
-        "mean uses all valid tokens; mean_recent also "
-        "concatenates a recent-window mean summary; attn uses a learned "
-        "query attention pooler per sequence domain.",
-    )
-    parser.add_argument(
-        "--query_recent_k",
-        type=int,
-        default=32,
-        help="Number of latest valid sequence tokens used by "
-        "--query_pooling_mode mean_recent",
     )
     parser.add_argument(
         "--num_hyformer_blocks",
@@ -283,7 +237,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use_rope",
         action="store_true",
-        default=True,
+        default=False,
         help="Enable RoPE positional encoding in sequence attention",
     )
     parser.add_argument(
@@ -298,8 +252,8 @@ def parse_args() -> argparse.Namespace:
         "--loss_type",
         type=str,
         default="bce",
-        choices=["bce", "focal", "bce_and_focal"],
-        help="Loss type: bce = BCEWithLogits, focal = Focal Loss, bce_and_focal = Both BCE and Focal Loss",
+        choices=["bce", "focal"],
+        help="Loss type: bce = BCEWithLogits, focal = Focal Loss",
     )
     parser.add_argument(
         "--focal_alpha",
@@ -314,22 +268,6 @@ def parse_args() -> argparse.Namespace:
         default=2.0,
         help="Focal Loss focusing parameter gamma "
         "(effective only when --loss_type=focal)",
-    )
-
-    # LR scheduler.
-    parser.add_argument(
-        "--warmup_ratio",
-        type=float,
-        default=0.05,
-        help="Fraction of total training steps used for linear LR warmup "
-        "(0 = no warmup; applies to dense AdamW only)",
-    )
-    parser.add_argument(
-        "--min_lr_ratio",
-        type=float,
-        default=0.05,
-        help="Minimum LR as a fraction of peak LR at the end of cosine decay "
-        "(e.g. 0.05 means LR decays to 5%% of --lr)",
     )
 
     # Sparse optimizer.
@@ -479,8 +417,6 @@ def main() -> None:
         buffer_batches=args.buffer_batches,
         seed=args.seed,
         seq_max_lens=seq_max_lens,
-        seq_stat_mode=args.seq_stat_mode,
-        seq_item_cross_mode=args.seq_item_cross_mode,
     )
 
     # ---- NS groups ----
@@ -529,14 +465,11 @@ def main() -> None:
         "user_dense_dim": pcvr_dataset.user_dense_schema.total_dim,
         "item_dense_dim": pcvr_dataset.item_dense_schema.total_dim,
         "seq_vocab_sizes": pcvr_dataset.seq_domain_vocab_sizes,
-        "seq_stat_dims": pcvr_dataset.seq_stat_dims,
         "user_ns_groups": user_ns_groups,
         "item_ns_groups": item_ns_groups,
         "d_model": args.d_model,
         "emb_dim": args.emb_dim,
         "num_queries": args.num_queries,
-        "query_pooling_mode": args.query_pooling_mode,
-        "query_recent_k": args.query_recent_k,
         "num_hyformer_blocks": args.num_hyformer_blocks,
         "num_heads": args.num_heads,
         "seq_encoder_type": args.seq_encoder_type,
@@ -554,7 +487,6 @@ def main() -> None:
         "ns_tokenizer_type": args.ns_tokenizer_type,
         "user_ns_tokens": args.user_ns_tokens,
         "item_ns_tokens": args.item_ns_tokens,
-        "seq_stat_injection": args.seq_stat_injection,
     }
 
     model = PCVRHyFormer(**model_args).to(args.device)
@@ -585,13 +517,6 @@ def main() -> None:
         "hidden": args.d_model,
     }
 
-    steps_per_epoch = len(train_loader)
-    total_steps = args.num_epochs * steps_per_epoch
-    logging.info(
-        f"Scheduler: steps_per_epoch≈{steps_per_epoch}, total_steps≈{total_steps}, "
-        f"warmup_ratio={args.warmup_ratio}, min_lr_ratio={args.min_lr_ratio}"
-    )
-
     trainer = PCVRHyFormerRankingTrainer(
         model=model,
         train_loader=train_loader,
@@ -618,15 +543,10 @@ def main() -> None:
         ),
         eval_every_n_steps=args.eval_every_n_steps,
         train_config=vars(args),
-        total_steps=total_steps,
-        warmup_ratio=args.warmup_ratio,
-        min_lr_ratio=args.min_lr_ratio,
     )
 
     trainer.train()
     writer.close()
-
-    logging.info(f"num_samples: {len(train_loader.dataset)}")
 
     logging.info("Training complete!")
 

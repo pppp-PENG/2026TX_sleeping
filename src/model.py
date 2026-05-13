@@ -13,10 +13,9 @@ class ModelInput(NamedTuple):
     item_int_feats: torch.Tensor
     user_dense_feats: torch.Tensor
     item_dense_feats: torch.Tensor
-    seq_data: dict  # {domain: tensor [B, S, L]}
-    seq_lens: dict  # {domain: tensor [B]}
+    seq_data: dict        # {domain: tensor [B, S, L]}
+    seq_lens: dict        # {domain: tensor [B]}
     seq_time_buckets: dict  # {domain: tensor [B, L]}
-    seq_stats: dict  # {domain: tensor [B, stat_dim]}; empty dict if unused
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -33,9 +32,7 @@ class RotaryEmbedding(nn.Module):
         base: Base frequency for rotary encoding.
     """
 
-    def __init__(
-        self, dim: int, max_seq_len: int = 2048, base: float = 10000.0
-    ) -> None:
+    def __init__(self, dim: int, max_seq_len: int = 2048, base: float = 10000.0) -> None:
         super().__init__()
         self.dim = dim
         self.max_seq_len = max_seq_len
@@ -43,27 +40,19 @@ class RotaryEmbedding(nn.Module):
 
         # Precompute inv_freq: (dim // 2,)
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.register_buffer('inv_freq', inv_freq, persistent=False)
 
         # Precompute cache
         self._build_cache(max_seq_len)
 
     def _build_cache(self, seq_len: int) -> None:
-        t = torch.arange(
-            seq_len, dtype=self.inv_freq.dtype, device=self.inv_freq.device
-        )
+        t = torch.arange(seq_len, dtype=self.inv_freq.dtype, device=self.inv_freq.device)
         freqs = torch.outer(t, self.inv_freq)  # (seq_len, dim // 2)
         emb = torch.cat([freqs, freqs], dim=-1)  # (seq_len, dim)
-        self.register_buffer(
-            "cos_cached", emb.cos().unsqueeze(0), persistent=False
-        )  # (1, seq_len, dim)
-        self.register_buffer(
-            "sin_cached", emb.sin().unsqueeze(0), persistent=False
-        )  # (1, seq_len, dim)
+        self.register_buffer('cos_cached', emb.cos().unsqueeze(0), persistent=False)  # (1, seq_len, dim)
+        self.register_buffer('sin_cached', emb.sin().unsqueeze(0), persistent=False)  # (1, seq_len, dim)
 
-    def forward(
-        self, seq_len: int, device: torch.device
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         """Computes cos/sin values for the given sequence length.
 
         Returns pre-computed slices from the cache. The cache is built once
@@ -195,7 +184,7 @@ class RoPEMultiheadAttention(nn.Module):
 
         # 1. Linear projection
         Q = self.W_q(query)  # (B, Lq, D)
-        K = self.W_k(key)  # (B, Lk, D)
+        K = self.W_k(key)    # (B, Lk, D)
         V = self.W_v(value)  # (B, Lk, D)
 
         # 2. Reshape to (B, num_heads, L, head_dim)
@@ -219,18 +208,14 @@ class RoPEMultiheadAttention(nn.Module):
         if key_padding_mask is not None:
             # key_padding_mask: (B, Lk), True = padding
             # SDPA expects (B, 1, 1, Lk) bool mask, True = attend
-            sdpa_attn_mask = ~key_padding_mask.unsqueeze(1).unsqueeze(
-                2
-            )  # (B, 1, 1, Lk)
+            sdpa_attn_mask = ~key_padding_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, Lk)
             sdpa_attn_mask = sdpa_attn_mask.expand(B, self.num_heads, Lq, Lk)
 
         if attn_mask is not None:
             # attn_mask: additive float mask (Lq, Lk), -inf means do not attend
             # Convert to bool: positions that are not -inf are True
-            bool_attn = attn_mask == 0  # (Lq, Lk)
-            bool_attn = (
-                bool_attn.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, Lq, Lk)
-            )
+            bool_attn = (attn_mask == 0)  # (Lq, Lk)
+            bool_attn = bool_attn.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, Lq, Lk)
             if sdpa_attn_mask is not None:
                 sdpa_attn_mask = sdpa_attn_mask & bool_attn
             else:
@@ -239,9 +224,7 @@ class RoPEMultiheadAttention(nn.Module):
         # 5. Scaled Dot-Product Attention
         dropout_p = self.dropout if self.training else 0.0
         out = F.scaled_dot_product_attention(
-            Q,
-            K,
-            V,
+            Q, K, V,
             attn_mask=sdpa_attn_mask,
             dropout_p=dropout_p,
         )  # (B, num_heads, Lq, head_dim)
@@ -266,7 +249,11 @@ class CrossAttention(nn.Module):
     """
 
     def __init__(
-        self, d_model: int, num_heads: int, dropout: float = 0.0, ln_mode: str = "pre"
+        self,
+        d_model: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        ln_mode: str = 'pre'
     ) -> None:
         super().__init__()
         self.ln_mode = ln_mode
@@ -278,7 +265,7 @@ class CrossAttention(nn.Module):
             rope_on_q=False,
         )
 
-        if ln_mode in ["pre", "post"]:
+        if ln_mode in ['pre', 'post']:
             self.norm_q = nn.LayerNorm(d_model)
             self.norm_kv = nn.LayerNorm(d_model)
 
@@ -304,7 +291,7 @@ class CrossAttention(nn.Module):
         """
         residual = query
 
-        if self.ln_mode == "pre":
+        if self.ln_mode == 'pre':
             query = self.norm_q(query)
             key_value = self.norm_kv(key_value)
 
@@ -319,7 +306,7 @@ class CrossAttention(nn.Module):
 
         out = residual + out
 
-        if self.ln_mode == "post":
+        if self.ln_mode == 'post':
             out = self.norm_q(out)
 
         return out
@@ -342,18 +329,18 @@ class RankMixerBlock(nn.Module):
         n_total: int,  # T = Nq + Nns
         hidden_mult: int = 4,
         dropout: float = 0.0,
-        mode: str = "full",  # 'full' | 'ffn_only' | 'none'
+        mode: str = 'full'  # 'full' | 'ffn_only' | 'none'
     ) -> None:
         super().__init__()
         self.T = n_total
         self.D = d_model
         self.mode = mode
 
-        if mode == "none":
+        if mode == 'none':
             # Pure identity mapping, no submodules created
             return
 
-        if mode == "full":
+        if mode == 'full':
             if d_model % n_total != 0:
                 raise ValueError(
                     f"d_model={d_model} must be divisible by T={n_total} for token mixing."
@@ -403,11 +390,11 @@ class RankMixerBlock(nn.Module):
         Returns:
             Boosted tensor of shape (B, T, D).
         """
-        if self.mode == "none":
+        if self.mode == 'none':
             return Q
 
         # Token Mixing (parameter-free rewire) or identity
-        if self.mode == "full":
+        if self.mode == 'full':
             Q_hat = self.token_mixing(Q)
         else:  # 'ffn_only'
             Q_hat = Q
@@ -440,68 +427,37 @@ class MultiSeqQueryGenerator(nn.Module):
         num_ns: int,
         num_queries: int,
         num_sequences: int,
-        hidden_mult: int = 4,
-        pooling_mode: str = "mean",
-        recent_k: int = 32,
-        attn_heads: int = 4,
+        hidden_mult: int = 4
     ) -> None:
         super().__init__()
-        if pooling_mode not in ("mean", "mean_recent", "attn"):
-            raise ValueError(
-                f"pooling_mode must be one of mean/mean_recent/attn, got {pooling_mode!r}"
-            )
         self.num_queries = num_queries
         self.num_sequences = num_sequences
         self.d_model = d_model
-        self.pooling_mode = pooling_mode
-        self.recent_k = recent_k
 
-        num_seq_summary_tokens = 2 if pooling_mode == "mean_recent" else 1
-        global_info_dim = (num_ns + num_seq_summary_tokens) * d_model
+        global_info_dim = (num_ns + 1) * d_model
 
         # LayerNorm on global_info to prevent gradient explosion from large-dim concat
         self.global_info_norm = nn.LayerNorm(global_info_dim)
 
-        if pooling_mode == "attn":
-            self.attn_pool_queries = nn.Parameter(
-                torch.empty(num_sequences, 1, d_model)
-            )
-            nn.init.xavier_normal_(self.attn_pool_queries)
-            self.attn_poolers = nn.ModuleList(
-                [
-                    nn.MultiheadAttention(
-                        embed_dim=d_model,
-                        num_heads=attn_heads,
-                        dropout=0.0,
-                        batch_first=True,
-                    )
-                    for _ in range(num_sequences)
-                ]
-            )
-            self.attn_pool_norms = nn.ModuleList(
-                [nn.LayerNorm(d_model) for _ in range(num_sequences)]
-            )
-
         # Each sequence has N independent FFNs
-        self.query_ffns_per_seq = nn.ModuleList(
-            [
-                nn.ModuleList(
-                    [
-                        nn.Sequential(
-                            nn.Linear(global_info_dim, d_model * hidden_mult),
-                            nn.SiLU(),
-                            nn.Linear(d_model * hidden_mult, d_model),
-                            nn.LayerNorm(d_model),
-                        )
-                        for _ in range(num_queries)
-                    ]
+        self.query_ffns_per_seq = nn.ModuleList([
+            nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(global_info_dim, d_model * hidden_mult),
+                    nn.SiLU(),
+                    nn.Linear(d_model * hidden_mult, d_model),
+                    nn.LayerNorm(d_model),
                 )
-                for _ in range(num_sequences)
-            ]
-        )
+                for _ in range(num_queries)
+            ])
+            for _ in range(num_sequences)
+        ])
 
     def forward(
-        self, ns_tokens: torch.Tensor, seq_tokens_list: list, seq_padding_masks: list
+        self,
+        ns_tokens: torch.Tensor,
+        seq_tokens_list: list,
+        seq_padding_masks: list
     ) -> list:
         """Generates query tokens for each sequence.
 
@@ -526,47 +482,8 @@ class MultiSeqQueryGenerator(nn.Module):
             seq_count = valid_mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
             seq_pooled = seq_sum / seq_count  # (B, D)
 
-            if self.pooling_mode == "attn":
-                safe_padding_mask = seq_padding_masks[i].clone()
-                all_padding = safe_padding_mask.all(dim=1)
-                if all_padding.any():
-                    safe_padding_mask[all_padding, 0] = False
-                pool_query = self.attn_pool_queries[i].unsqueeze(0).expand(B, -1, -1)
-                attn_pooled, _ = self.attn_poolers[i](
-                    query=pool_query,
-                    key=seq_tokens_list[i],
-                    value=seq_tokens_list[i],
-                    key_padding_mask=safe_padding_mask,
-                    need_weights=False,
-                )
-                seq_pooled = self.attn_pool_norms[i](attn_pooled.squeeze(1))
-                if all_padding.any():
-                    seq_pooled = torch.where(
-                        all_padding.unsqueeze(1),
-                        torch.zeros_like(seq_pooled),
-                        seq_pooled,
-                    )
-
-            seq_summary_parts = [seq_pooled]
-            if self.pooling_mode == "mean_recent":
-                L_i = seq_tokens_list[i].shape[1]
-                idx = torch.arange(L_i, device=seq_tokens_list[i].device).unsqueeze(0)
-                valid_len = valid_mask.sum(dim=1)
-                recent_len = torch.clamp(valid_len, max=self.recent_k)
-                recent_start = valid_len - recent_len
-                recent_mask = (
-                    (idx >= recent_start.unsqueeze(1))
-                    & (idx < valid_len.unsqueeze(1))
-                    & valid_mask
-                )
-                recent_mask_expanded = recent_mask.unsqueeze(-1).float()
-                recent_sum = (seq_tokens_list[i] * recent_mask_expanded).sum(dim=1)
-                recent_count = recent_mask_expanded.sum(dim=1).clamp(min=1)
-                recent_pooled = recent_sum / recent_count
-                seq_summary_parts.append(recent_pooled)
-
-            # GlobalInfo_i = Concat(NS_flat, sequence summaries)
-            global_info = torch.cat([ns_flat] + seq_summary_parts, dim=-1)
+            # GlobalInfo_i = Concat(NS_flat, seq_pooled_i)
+            global_info = torch.cat([ns_flat, seq_pooled], dim=-1)  # (B, (M+1)*D)
             global_info = self.global_info_norm(global_info)
 
             # Generate N query tokens
@@ -575,43 +492,6 @@ class MultiSeqQueryGenerator(nn.Module):
             q_tokens_list.append(q_tokens)
 
         return q_tokens_list
-
-
-class NSOnlyQueryGenerator(nn.Module):
-    """Generate per-sequence Q tokens from NS tokens only."""
-
-    def __init__(
-        self,
-        d_model: int,
-        num_ns: int,
-        num_queries: int,
-        num_sequences: int,
-        hidden_mult: int = 4,
-    ) -> None:
-        super().__init__()
-        self.num_queries = num_queries
-        self.num_sequences = num_sequences
-        self.d_model = d_model
-
-        input_dim = num_ns * d_model
-        output_dim = num_sequences * num_queries * d_model
-        self.query_mlp = nn.Sequential(
-            nn.LayerNorm(input_dim),
-            nn.Linear(input_dim, d_model * hidden_mult),
-            nn.SiLU(),
-            nn.Linear(d_model * hidden_mult, output_dim),
-        )
-        self.query_norm = nn.LayerNorm(d_model)
-
-    def forward(self, ns_tokens: torch.Tensor) -> list:
-        B = ns_tokens.shape[0]
-        ns_flat = ns_tokens.view(B, -1)
-        q_tokens = self.query_mlp(ns_flat)
-        q_tokens = q_tokens.view(
-            B, self.num_sequences, self.num_queries, self.d_model
-        )
-        q_tokens = self.query_norm(q_tokens)
-        return [q_tokens[:, i] for i in range(self.num_sequences)]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -626,7 +506,10 @@ class SwiGLUEncoder(nn.Module):
     """
 
     def __init__(
-        self, d_model: int, hidden_mult: int = 4, dropout: float = 0.0
+        self,
+        d_model: int,
+        hidden_mult: int = 4,
+        dropout: float = 0.0
     ) -> None:
         super().__init__()
         self.norm = nn.LayerNorm(d_model)
@@ -634,7 +517,10 @@ class SwiGLUEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(
-        self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None, **kwargs
+        self,
+        x: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        **kwargs
     ) -> torch.Tensor:
         """Applies the SwiGLU encoder with residual connection.
 
@@ -662,7 +548,11 @@ class TransformerEncoder(nn.Module):
     """
 
     def __init__(
-        self, d_model: int, num_heads: int, hidden_mult: int = 4, dropout: float = 0.0
+        self,
+        d_model: int,
+        num_heads: int,
+        hidden_mult: int = 4,
+        dropout: float = 0.0
     ) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
@@ -681,7 +571,7 @@ class TransformerEncoder(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, d_model),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout)
         )
 
     def forward(
@@ -723,7 +613,6 @@ class TransformerEncoder(nn.Module):
 
         return x, key_padding_mask
 
-
 class LongerEncoder(nn.Module):
     """Top-K compressed sequence encoder.
 
@@ -747,7 +636,7 @@ class LongerEncoder(nn.Module):
         top_k: int = 50,
         hidden_mult: int = 4,
         dropout: float = 0.0,
-        causal: bool = False,
+        causal: bool = False
     ) -> None:
         super().__init__()
         self.top_k = top_k
@@ -773,11 +662,13 @@ class LongerEncoder(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, d_model),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout)
         )
 
     def _gather_top_k(
-        self, x: torch.Tensor, key_padding_mask: torch.Tensor
+        self,
+        x: torch.Tensor,
+        key_padding_mask: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Selects the latest top_k valid tokens from each sample.
 
@@ -802,9 +693,7 @@ class LongerEncoder(nn.Module):
         start_pos = valid_len - actual_k  # (B,)
 
         # Build gather indices: (B, top_k)
-        offsets = (
-            torch.arange(self.top_k, device=device).unsqueeze(0).expand(B, -1)
-        )  # (B, top_k)
+        offsets = torch.arange(self.top_k, device=device).unsqueeze(0).expand(B, -1)  # (B, top_k)
         indices = start_pos.unsqueeze(1) + offsets  # (B, top_k)
 
         # For samples with valid_len < top_k, early indices may exceed valid range;
@@ -869,9 +758,7 @@ class LongerEncoder(nn.Module):
                 # Expand to batch dimension
                 cos_expanded = rope_cos.expand(B, -1, -1)  # (B, L_max, head_dim)
                 sin_expanded = rope_sin.expand(B, -1, -1)
-                idx = q_pos_indices.unsqueeze(-1).expand(
-                    -1, -1, head_dim
-                )  # (B, top_k, head_dim)
+                idx = q_pos_indices.unsqueeze(-1).expand(-1, -1, head_dim)  # (B, top_k, head_dim)
                 q_rope_cos = torch.gather(cos_expanded, 1, idx)  # (B, top_k, head_dim)
                 q_rope_sin = torch.gather(sin_expanded, 1, idx)
 
@@ -928,7 +815,7 @@ def create_sequence_encoder(
     hidden_mult: int = 4,
     dropout: float = 0.0,
     top_k: int = 50,
-    causal: bool = False,
+    causal: bool = False
 ) -> nn.Module:
     """Creates a sequence encoder of the specified type.
 
@@ -945,11 +832,11 @@ def create_sequence_encoder(
     Returns:
         A sequence encoder module.
     """
-    if encoder_type == "swiglu":
+    if encoder_type == 'swiglu':
         return SwiGLUEncoder(d_model, hidden_mult, dropout)
-    elif encoder_type == "transformer":
+    elif encoder_type == 'transformer':
         return TransformerEncoder(d_model, num_heads, hidden_mult, dropout)
-    elif encoder_type == "longer":
+    elif encoder_type == 'longer':
         return LongerEncoder(d_model, num_heads, top_k, hidden_mult, dropout, causal)
     else:
         raise ValueError(f"Unknown encoder type: {encoder_type}")
@@ -975,12 +862,12 @@ class MultiSeqHyFormerBlock(nn.Module):
         num_queries: int,
         num_ns: int,
         num_sequences: int,
-        seq_encoder_type: str = "swiglu",
+        seq_encoder_type: str = 'swiglu',
         hidden_mult: int = 4,
         dropout: float = 0.0,
         top_k: int = 50,
         causal: bool = False,
-        rank_mixer_mode: str = "full",
+        rank_mixer_mode: str = 'full'
     ) -> None:
         super().__init__()
         self.num_sequences = num_sequences
@@ -988,30 +875,29 @@ class MultiSeqHyFormerBlock(nn.Module):
         self.num_ns = num_ns
 
         # Independent sequence encoder per sequence
-        self.seq_encoders = nn.ModuleList(
-            [
-                create_sequence_encoder(
-                    encoder_type=seq_encoder_type,
-                    d_model=d_model,
-                    num_heads=num_heads,
-                    hidden_mult=hidden_mult,
-                    dropout=dropout,
-                    top_k=top_k,
-                    causal=causal,
-                )
-                for _ in range(num_sequences)
-            ]
-        )
+        self.seq_encoders = nn.ModuleList([
+            create_sequence_encoder(
+                encoder_type=seq_encoder_type,
+                d_model=d_model,
+                num_heads=num_heads,
+                hidden_mult=hidden_mult,
+                dropout=dropout,
+                top_k=top_k,
+                causal=causal
+            )
+            for _ in range(num_sequences)
+        ])
 
         # Independent cross-attention per sequence
-        self.cross_attns = nn.ModuleList(
-            [
-                CrossAttention(
-                    d_model=d_model, num_heads=num_heads, dropout=dropout, ln_mode="pre"
-                )
-                for _ in range(num_sequences)
-            ]
-        )
+        self.cross_attns = nn.ModuleList([
+            CrossAttention(
+                d_model=d_model,
+                num_heads=num_heads,
+                dropout=dropout,
+                ln_mode='pre'
+            )
+            for _ in range(num_sequences)
+        ])
 
         # RankMixer: input token count = Nq * S + Nns
         n_total = num_queries * num_sequences + num_ns
@@ -1020,7 +906,7 @@ class MultiSeqHyFormerBlock(nn.Module):
             n_total=n_total,
             hidden_mult=hidden_mult,
             dropout=dropout,
-            mode=rank_mixer_mode,
+            mode=rank_mixer_mode
         )
 
     def forward(
@@ -1059,10 +945,8 @@ class MultiSeqHyFormerBlock(nn.Module):
             rc = rope_cos_list[i] if rope_cos_list is not None else None
             rs = rope_sin_list[i] if rope_sin_list is not None else None
             result = self.seq_encoders[i](
-                seq_tokens_list[i],
-                seq_padding_masks[i],
-                rope_cos=rc,
-                rope_sin=rs,
+                seq_tokens_list[i], seq_padding_masks[i],
+                rope_cos=rc, rope_sin=rs,
             )
             next_seq_i, mask_i = result
             next_seqs.append(next_seq_i)
@@ -1074,11 +958,8 @@ class MultiSeqHyFormerBlock(nn.Module):
             rc = rope_cos_list[i] if rope_cos_list is not None else None
             rs = rope_sin_list[i] if rope_sin_list is not None else None
             decoded_q_i = self.cross_attns[i](
-                q_tokens_list[i],
-                next_seqs[i],
-                next_masks[i],
-                rope_cos=rc,
-                rope_sin=rs,
+                q_tokens_list[i], next_seqs[i], next_masks[i],
+                rope_cos=rc, rope_sin=rs,
             )
             decoded_qs.append(decoded_q_i)
 
@@ -1092,7 +973,7 @@ class MultiSeqHyFormerBlock(nn.Module):
         next_q_list = []
         offset = 0
         for i in range(S):
-            next_q_list.append(boosted[:, offset : offset + Nq, :])
+            next_q_list.append(boosted[:, offset:offset + Nq, :])
             offset += Nq
         next_ns = boosted[:, offset:, :]
 
@@ -1112,14 +993,9 @@ class GroupNSTokenizer(nn.Module):
     NS token (one token per group).
     """
 
-    def __init__(
-        self,
-        feature_specs: List[Tuple[int, int, int]],
-        groups: List[List[int]],
-        emb_dim: int,
-        d_model: int,
-        emb_skip_threshold: int = 0,
-    ) -> None:
+    def __init__(self, feature_specs: List[Tuple[int, int, int]],
+                 groups: List[List[int]], emb_dim: int, d_model: int,
+                 emb_skip_threshold: int = 0) -> None:
         super().__init__()
         self.feature_specs = feature_specs
         self.groups = groups
@@ -1130,9 +1006,7 @@ class GroupNSTokenizer(nn.Module):
         # or if vocab_size <= 0 / no vocab info).
         embs = []
         for vs, offset, length in feature_specs:
-            skip = int(vs) <= 0 or (
-                emb_skip_threshold > 0 and int(vs) > emb_skip_threshold
-            )
+            skip = int(vs) <= 0 or (emb_skip_threshold > 0 and int(vs) > emb_skip_threshold)
             if skip:
                 embs.append(None)
             else:
@@ -1149,15 +1023,13 @@ class GroupNSTokenizer(nn.Module):
                 self._emb_index.append(-1)
 
         # Per-group projection: num_fids_in_group * emb_dim -> d_model (with LayerNorm)
-        self.group_projs = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(len(group) * emb_dim, d_model),
-                    nn.LayerNorm(d_model),
-                )
-                for group in groups
-            ]
-        )
+        self.group_projs = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(len(group) * emb_dim, d_model),
+                nn.LayerNorm(d_model),
+            )
+            for group in groups
+        ])
 
     def forward(self, int_feats: torch.Tensor) -> torch.Tensor:
         """Embeds and projects grouped discrete features into NS tokens.
@@ -1184,9 +1056,7 @@ class GroupNSTokenizer(nn.Module):
                         fid_emb = emb_layer(int_feats[:, offset].long())  # (B, emb_dim)
                     else:
                         # Multi-value feature: lookup then mean pooling (ignoring padding=0)
-                        vals = int_feats[
-                            :, offset : offset + length
-                        ].long()  # (B, length)
+                        vals = int_feats[:, offset:offset + length].long()  # (B, length)
                         emb_all = emb_layer(vals)  # (B, length, emb_dim)
                         mask = (vals != 0).float().unsqueeze(-1)  # (B, length, 1)
                         count = mask.sum(dim=1).clamp(min=1)  # (B, 1)
@@ -1235,9 +1105,7 @@ class RankMixerNSTokenizer(nn.Module):
         # or if vocab_size <= 0 / no vocab info).
         embs = []
         for vs, offset, length in feature_specs:
-            skip = int(vs) <= 0 or (
-                emb_skip_threshold > 0 and int(vs) > emb_skip_threshold
-            )
+            skip = int(vs) <= 0 or (emb_skip_threshold > 0 and int(vs) > emb_skip_threshold)
             if skip:
                 embs.append(None)
             else:
@@ -1263,15 +1131,13 @@ class RankMixerNSTokenizer(nn.Module):
         self._pad_size = self.padded_total_dim - total_emb_dim
 
         # Per-chunk projection: chunk_dim -> d_model with LayerNorm
-        self.token_projs = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(self.chunk_dim, d_model),
-                    nn.LayerNorm(d_model),
-                )
-                for _ in range(num_ns_tokens)
-            ]
-        )
+        self.token_projs = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(self.chunk_dim, d_model),
+                nn.LayerNorm(d_model),
+            )
+            for _ in range(num_ns_tokens)
+        ])
 
         logging.info(
             f"RankMixerNSTokenizer: {total_num_fids} fids, "
@@ -1301,7 +1167,7 @@ class RankMixerNSTokenizer(nn.Module):
                     if length == 1:
                         fid_emb = emb_layer(int_feats[:, offset].long())
                     else:
-                        vals = int_feats[:, offset : offset + length].long()
+                        vals = int_feats[:, offset:offset + length].long()
                         emb_all = emb_layer(vals)
                         mask = (vals != 0).float().unsqueeze(-1)
                         count = mask.sum(dim=1).clamp(min=1)
@@ -1347,32 +1213,24 @@ class PCVRHyFormer(nn.Module):
         num_queries: int = 1,
         num_hyformer_blocks: int = 2,
         num_heads: int = 4,
-        seq_encoder_type: str = "transformer",
+        seq_encoder_type: str = 'transformer',
         hidden_mult: int = 4,
         dropout_rate: float = 0.01,
         seq_top_k: int = 50,
         seq_causal: bool = False,
         action_num: int = 1,
         num_time_buckets: int = 65,
-        rank_mixer_mode: str = "full",
+        rank_mixer_mode: str = 'full',
         use_rope: bool = False,
         rope_base: float = 10000.0,
         emb_skip_threshold: int = 0,
         seq_id_threshold: int = 10000,
         # NS tokenizer variant
-        ns_tokenizer_type: str = "rankmixer",
+        ns_tokenizer_type: str = 'rankmixer',
         user_ns_tokens: int = 0,
         item_ns_tokens: int = 0,
-        seq_stat_dims: Optional["dict[str, int]"] = None,
-        seq_stat_injection: str = "add",
-        query_pooling_mode: str = "mean",
-        query_recent_k: int = 32,
     ) -> None:
         super().__init__()
-        if seq_stat_injection not in ("add", "token"):
-            raise ValueError(
-                f"seq_stat_injection must be one of add/token, got {seq_stat_injection!r}"
-            )
 
         self.d_model = d_model
         self.emb_dim = emb_dim
@@ -1381,13 +1239,6 @@ class PCVRHyFormer(nn.Module):
         self.seq_domains = sorted(seq_vocab_sizes.keys())  # deterministic order
         self.num_sequences = len(self.seq_domains)
         self.num_time_buckets = num_time_buckets
-        self.seq_stat_dims = {
-            domain: int((seq_stat_dims or {}).get(domain, 4))
-            for domain in self.seq_domains
-        }
-        self.seq_stat_injection = seq_stat_injection
-        self.query_pooling_mode = query_pooling_mode
-        self.query_recent_k = query_recent_k
         self.rank_mixer_mode = rank_mixer_mode
         self.use_rope = use_rope
         self.emb_skip_threshold = emb_skip_threshold
@@ -1396,7 +1247,7 @@ class PCVRHyFormer(nn.Module):
 
         # ================== NS Tokens Construction ==================
 
-        if ns_tokenizer_type == "group":
+        if ns_tokenizer_type == 'group':
             # Original: one NS token per group
             self.user_ns_tokenizer = GroupNSTokenizer(
                 feature_specs=user_int_feature_specs,
@@ -1415,7 +1266,7 @@ class PCVRHyFormer(nn.Module):
                 emb_skip_threshold=emb_skip_threshold,
             )
             num_item_ns = len(item_ns_groups)
-        elif ns_tokenizer_type == "rankmixer":
+        elif ns_tokenizer_type == 'rankmixer':
             # RankMixer paper style: all embeddings cat → split → project
             # 0 means auto: fall back to group count
             if user_ns_tokens <= 0:
@@ -1461,16 +1312,12 @@ class PCVRHyFormer(nn.Module):
             )
 
         # Total NS token count
-        self.num_ns = (
-            num_user_ns
-            + (1 if self.has_user_dense else 0)
-            + num_item_ns
-            + (1 if self.has_item_dense else 0)
-        )
+        self.num_ns = (num_user_ns + (1 if self.has_user_dense else 0)
+                       + num_item_ns + (1 if self.has_item_dense else 0))
 
         # ================== Check d_model % T == 0 constraint (full mode only) ==================
         T = num_queries * self.num_sequences + self.num_ns
-        if rank_mixer_mode == "full" and d_model % T != 0:
+        if rank_mixer_mode == 'full' and d_model % T != 0:
             valid_T_values = [t for t in range(1, d_model + 1) if d_model % t == 0]
             raise ValueError(
                 f"d_model={d_model} must be divisible by T=num_queries*num_sequences+num_ns="
@@ -1489,9 +1336,7 @@ class PCVRHyFormer(nn.Module):
             emb_skip_threshold or with no vocab info (vs<=0)."""
             embs_raw = []
             for vs in vocab_sizes:
-                skip = int(vs) <= 0 or (
-                    emb_skip_threshold > 0 and int(vs) > emb_skip_threshold
-                )
+                skip = int(vs) <= 0 or (emb_skip_threshold > 0 and int(vs) > emb_skip_threshold)
                 if skip:
                     embs_raw.append(None)
                 else:
@@ -1511,8 +1356,8 @@ class PCVRHyFormer(nn.Module):
 
         # ================== Dynamic Sequence Embeddings ==================
         self._seq_embs = nn.ModuleDict()
-        self._seq_emb_index = {}  # domain -> index_map
-        self._seq_is_id = {}  # domain -> is_id list
+        self._seq_emb_index = {}    # domain -> index_map
+        self._seq_is_id = {}        # domain -> is_id list
         self._seq_vocab_sizes = {}  # domain -> vocab_sizes list
         self._seq_proj = nn.ModuleDict()
 
@@ -1532,24 +1377,6 @@ class PCVRHyFormer(nn.Module):
         if num_time_buckets > 0:
             self.time_embedding = nn.Embedding(num_time_buckets, d_model, padding_idx=0)
 
-        # ================== Sequence Dense Statistics Projection ==================
-        # One lightweight projection per enabled domain; output is broadcast-added
-        # to all sequence positions so the mean-pool in query generation picks it up.
-        self.seq_stat_projs = nn.ModuleList(
-            [
-                (
-                    nn.Sequential(
-                        nn.Linear(self.seq_stat_dims[domain], d_model),
-                        nn.SiLU(),
-                        nn.LayerNorm(d_model),
-                    )
-                    if self.seq_stat_dims[domain] > 0
-                    else nn.Identity()
-                )
-                for domain in self.seq_domains
-            ]
-        )
-
         # ================== HyFormer Components ==================
         # MultiSeqQueryGenerator
         self.query_generator = MultiSeqQueryGenerator(
@@ -1558,37 +1385,25 @@ class PCVRHyFormer(nn.Module):
             num_queries=num_queries,
             num_sequences=self.num_sequences,
             hidden_mult=hidden_mult,
-            pooling_mode=query_pooling_mode,
-            recent_k=query_recent_k,
-            attn_heads=num_heads,
         )
-        # self.query_generator_ns_only = NSOnlyQueryGenerator(
-        #     d_model=d_model,
-        #     num_ns=self.num_ns,
-        #     num_queries=num_queries,
-        #     num_sequences=self.num_sequences,
-        #     hidden_mult=hidden_mult,
-        # )
 
         # MultiSeqHyFormerBlock stack
-        self.blocks = nn.ModuleList(
-            [
-                MultiSeqHyFormerBlock(
-                    d_model=d_model,
-                    num_heads=num_heads,
-                    num_queries=num_queries,
-                    num_ns=self.num_ns,
-                    num_sequences=self.num_sequences,
-                    seq_encoder_type=seq_encoder_type,
-                    hidden_mult=hidden_mult,
-                    dropout=dropout_rate,
-                    top_k=seq_top_k,
-                    causal=seq_causal,
-                    rank_mixer_mode=rank_mixer_mode,
-                )
-                for _ in range(num_hyformer_blocks)
-            ]
-        )
+        self.blocks = nn.ModuleList([
+            MultiSeqHyFormerBlock(
+                d_model=d_model,
+                num_heads=num_heads,
+                num_queries=num_queries,
+                num_ns=self.num_ns,
+                num_sequences=self.num_sequences,
+                seq_encoder_type=seq_encoder_type,
+                hidden_mult=hidden_mult,
+                dropout=dropout_rate,
+                top_k=seq_top_k,
+                causal=seq_causal,
+                rank_mixer_mode=rank_mixer_mode,
+            )
+            for _ in range(num_hyformer_blocks)
+        ])
 
         # ================== RoPE ==================
         if use_rope:
@@ -1612,7 +1427,7 @@ class PCVRHyFormer(nn.Module):
             nn.LayerNorm(d_model),
             nn.SiLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(d_model, action_num),
+            nn.Linear(d_model, action_num)
         )
 
         # Initialize parameters
@@ -1620,19 +1435,13 @@ class PCVRHyFormer(nn.Module):
 
         # Log emb_skip_threshold filtering stats
         if emb_skip_threshold > 0:
-
             def _count_filtered(vocab_sizes, emb_index):
                 filtered = sum(1 for idx in emb_index if idx == -1)
                 return filtered, len(vocab_sizes)
-
             for domain in self.seq_domains:
-                f, t = _count_filtered(
-                    self._seq_vocab_sizes[domain], self._seq_emb_index[domain]
-                )
+                f, t = _count_filtered(self._seq_vocab_sizes[domain], self._seq_emb_index[domain])
                 if f > 0:
-                    logging.info(
-                        f"emb_skip_threshold={emb_skip_threshold}: {domain} skipped {f}/{t} features"
-                    )
+                    logging.info(f"emb_skip_threshold={emb_skip_threshold}: {domain} skipped {f}/{t} features")
             for name, tokenizer in [
                 ("user_ns", self.user_ns_tokenizer),
                 ("item_ns", self.item_ns_tokenizer),
@@ -1640,9 +1449,7 @@ class PCVRHyFormer(nn.Module):
                 f = sum(1 for idx in tokenizer._emb_index if idx == -1)
                 t = len(tokenizer._emb_index)
                 if f > 0:
-                    logging.info(
-                        f"emb_skip_threshold={emb_skip_threshold}: {name} skipped {f}/{t} features"
-                    )
+                    logging.info(f"emb_skip_threshold={emb_skip_threshold}: {name} skipped {f}/{t} features")
 
     def _init_params(self) -> None:
         """Applies Xavier initialization to all embedding weights."""
@@ -1717,10 +1524,8 @@ class PCVRHyFormer(nn.Module):
         if self.num_time_buckets > 0:
             skip_count += 1
 
-        logging.info(
-            f"Re-initialized {reinit_count} high-cardinality Embeddings "
-            f"(vocab>{cardinality_threshold}), kept {skip_count}"
-        )
+        logging.info(f"Re-initialized {reinit_count} high-cardinality Embeddings "
+                     f"(vocab>{cardinality_threshold}), kept {skip_count}")
         return reinit_ptrs
 
     def get_sparse_params(self) -> List[nn.Parameter]:
@@ -1768,35 +1573,13 @@ class PCVRHyFormer(nn.Module):
 
         return token_emb
 
-    def _make_padding_mask(self, seq_len: torch.Tensor, max_len: int) -> torch.Tensor:
+    def _make_padding_mask(
+        self, seq_len: torch.Tensor, max_len: int
+    ) -> torch.Tensor:
         """Generates a padding mask from sequence lengths."""
         device = seq_len.device
         idx = torch.arange(max_len, device=device).unsqueeze(0)  # (1, max_len)
         return idx >= seq_len.unsqueeze(1)  # (B, max_len)
-
-    def _inject_seq_stats(
-        self,
-        domain_idx: int,
-        domain: str,
-        tokens: torch.Tensor,
-        mask: torch.Tensor,
-        inputs: ModelInput,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Inject per-domain dense stats either by addition or as a stat token."""
-        if domain not in inputs.seq_stats or self.seq_stat_dims[domain] <= 0:
-            return tokens, mask
-
-        stat_emb = self.seq_stat_projs[domain_idx](
-            inputs.seq_stats[domain].to(tokens.dtype)
-        )  # (B, D)
-        if self.seq_stat_injection == "add":
-            return tokens + stat_emb.unsqueeze(1), mask
-
-        stat_token = stat_emb.unsqueeze(1)  # (B, 1, D)
-        stat_mask = torch.zeros(mask.shape[0], 1, dtype=mask.dtype, device=mask.device)
-        return torch.cat([stat_token, tokens], dim=1), torch.cat(
-            [stat_mask, mask], dim=1
-        )
 
     def _run_multi_seq_blocks(
         self,
@@ -1804,7 +1587,7 @@ class PCVRHyFormer(nn.Module):
         ns_tokens: torch.Tensor,
         seq_tokens_list: list,
         seq_masks_list: list,
-        apply_dropout: bool = True,
+        apply_dropout: bool = True
     ) -> torch.Tensor:
         """Runs the multi-sequence block stack with dropout and output projection."""
         if apply_dropout:
@@ -1851,28 +1634,16 @@ class PCVRHyFormer(nn.Module):
     def forward(self, inputs: ModelInput) -> torch.Tensor:
         """Runs the forward pass of the PCVRHyFormer model."""
         # 1. NS tokens: grouped projection
-        user_ns = self.user_ns_tokenizer(
-            inputs.user_int_feats
-        )  # (B, num_user_groups, D)
-        item_ns = self.item_ns_tokenizer(
-            inputs.item_int_feats
-        )  # (B, num_item_groups, D)
+        user_ns = self.user_ns_tokenizer(inputs.user_int_feats)   # (B, num_user_groups, D)
+        item_ns = self.item_ns_tokenizer(inputs.item_int_feats)   # (B, num_item_groups, D)
 
         ns_parts = [user_ns]
         if self.has_user_dense:
-            user_dense_tok = F.silu(
-                self.user_dense_proj(inputs.user_dense_feats)
-            ).unsqueeze(
-                1
-            )  # (B, 1, D)
+            user_dense_tok = F.silu(self.user_dense_proj(inputs.user_dense_feats)).unsqueeze(1)  # (B, 1, D)
             ns_parts.append(user_dense_tok)
         ns_parts.append(item_ns)
         if self.has_item_dense:
-            item_dense_tok = F.silu(
-                self.item_dense_proj(inputs.item_dense_feats)
-            ).unsqueeze(
-                1
-            )  # (B, 1, D)
+            item_dense_tok = F.silu(self.item_dense_proj(inputs.item_dense_feats)).unsqueeze(1)  # (B, 1, D)
             ns_parts.append(item_dense_tok)
 
         ns_tokens = torch.cat(ns_parts, dim=1)  # (B, num_ns, D)
@@ -1880,33 +1651,23 @@ class PCVRHyFormer(nn.Module):
         # 2. Embed each sequence domain (dynamic)
         seq_tokens_list = []
         seq_masks_list = []
-        for i, domain in enumerate(self.seq_domains):
+        for domain in self.seq_domains:
             tokens = self._embed_seq_domain(
                 inputs.seq_data[domain],
-                self._seq_embs[domain],
-                self._seq_proj[domain],
-                self._seq_is_id[domain],
-                self._seq_emb_index[domain],
-                inputs.seq_time_buckets[domain],
-            )
-            mask = self._make_padding_mask(
-                inputs.seq_lens[domain], inputs.seq_data[domain].shape[2]
-            )
-            tokens, mask = self._inject_seq_stats(i, domain, tokens, mask, inputs)
+                self._seq_embs[domain], self._seq_proj[domain],
+                self._seq_is_id[domain], self._seq_emb_index[domain],
+                inputs.seq_time_buckets[domain])
             seq_tokens_list.append(tokens)
+            mask = self._make_padding_mask(inputs.seq_lens[domain], inputs.seq_data[domain].shape[2])
             seq_masks_list.append(mask)
 
-        # 3. Generate independent Q tokens per sequence from NS tokens.
+        # 3. Generate independent Q tokens per sequence via MultiSeqQueryGenerator
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
-        # q_tokens_list = self.query_generator_ns_only(ns_tokens)
 
         # 4. Dropout + MultiSeqHyFormerBlock stack + output projection
         output = self._run_multi_seq_blocks(
-            q_tokens_list,
-            ns_tokens,
-            seq_tokens_list,
-            seq_masks_list,
-            apply_dropout=self.training,
+            q_tokens_list, ns_tokens, seq_tokens_list, seq_masks_list,
+            apply_dropout=self.training
         )
 
         # 5. Classifier
@@ -1921,46 +1682,32 @@ class PCVRHyFormer(nn.Module):
 
         ns_parts = [user_ns]
         if self.has_user_dense:
-            user_dense_tok = F.silu(
-                self.user_dense_proj(inputs.user_dense_feats)
-            ).unsqueeze(1)
+            user_dense_tok = F.silu(self.user_dense_proj(inputs.user_dense_feats)).unsqueeze(1)
             ns_parts.append(user_dense_tok)
         ns_parts.append(item_ns)
         if self.has_item_dense:
-            item_dense_tok = F.silu(
-                self.item_dense_proj(inputs.item_dense_feats)
-            ).unsqueeze(1)
+            item_dense_tok = F.silu(self.item_dense_proj(inputs.item_dense_feats)).unsqueeze(1)
             ns_parts.append(item_dense_tok)
 
         ns_tokens = torch.cat(ns_parts, dim=1)
 
         seq_tokens_list = []
         seq_masks_list = []
-        for i, domain in enumerate(self.seq_domains):
+        for domain in self.seq_domains:
             tokens = self._embed_seq_domain(
                 inputs.seq_data[domain],
-                self._seq_embs[domain],
-                self._seq_proj[domain],
-                self._seq_is_id[domain],
-                self._seq_emb_index[domain],
-                inputs.seq_time_buckets[domain],
-            )
-            mask = self._make_padding_mask(
-                inputs.seq_lens[domain], inputs.seq_data[domain].shape[2]
-            )
-            tokens, mask = self._inject_seq_stats(i, domain, tokens, mask, inputs)
+                self._seq_embs[domain], self._seq_proj[domain],
+                self._seq_is_id[domain], self._seq_emb_index[domain],
+                inputs.seq_time_buckets[domain])
             seq_tokens_list.append(tokens)
+            mask = self._make_padding_mask(inputs.seq_lens[domain], inputs.seq_data[domain].shape[2])
             seq_masks_list.append(mask)
 
         q_tokens_list = self.query_generator(ns_tokens, seq_tokens_list, seq_masks_list)
-        # q_tokens_list = self.query_generator_ns_only(ns_tokens)
 
         output = self._run_multi_seq_blocks(
-            q_tokens_list,
-            ns_tokens,
-            seq_tokens_list,
-            seq_masks_list,
-            apply_dropout=False,
+            q_tokens_list, ns_tokens, seq_tokens_list, seq_masks_list,
+            apply_dropout=False
         )
 
         logits = self.clsfier(output)
